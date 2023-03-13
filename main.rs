@@ -136,7 +136,7 @@ impl WebSocket {
         };
 
         let required = 2 + extra + mask.map(|_| 4).unwrap_or(0) + length;
-        dbg!(required);
+
         if required > head.len() {
             // Allocate more space
             let mut new_head = head.to_vec();

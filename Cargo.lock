@@ -278,6 +278,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a507befe795404456341dfab10cef66ead4c041f62b8b11bbb92bffe5d0953e0"
 
 [[package]]
+name = "sockdeez"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "rand",
+ "sha1",
+ "tokio",
+]
+
+[[package]]
 name = "socket2"
 version = "0.4.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -285,16 +295,6 @@ checksum = "64a4a911eed85daf18834cfaa86a79b7d266ff93ff5ba14005426219480ed662"
 dependencies = [
  "libc",
  "winapi",
-]
-
-[[package]]
-name = "sox"
-version = "0.1.0"
-dependencies = [
- "base64",
- "rand",
- "sha1",
- "tokio",
 ]
 
 [[package]]

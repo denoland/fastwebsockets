@@ -1,5 +1,5 @@
 [package]
-name = "sox"
+name = "sockdeez"
 version = "0.1.0"
 authors = ["Divy Srivastava <dj.srivastava23@gmail.com>"]
 edition = "2021"
