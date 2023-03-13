@@ -1,0 +1,21 @@
+[package]
+name = "sox"
+version = "0.1.0"
+authors = ["Divy Srivastava <dj.srivastava23@gmail.com>"]
+edition = "2021"
+
+[[bin]]
+name = "socket"
+path = "main.rs"
+
+[dependencies]
+# tokio = { version = "1.26.0", features = ["rt", "net"] }
+tokio = { version = "1.26.0", features = ["full"] }
+base64 = "0.21.0"
+sha1 = "0.10.5"
+rand = "0.8.4"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
