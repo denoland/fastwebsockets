@@ -4,9 +4,12 @@ version = "0.1.0"
 authors = ["Divy Srivastava <dj.srivastava23@gmail.com>"]
 edition = "2021"
 
-[[bin]]
-name = "socket"
-path = "main.rs"
+[lib]
+path = "lib.rs"
+
+[[example]]
+name = "echo_server"
+path = "examples/echo_server.rs"
 
 [dependencies]
 # tokio = { version = "1.26.0", features = ["rt", "net"] }
@@ -14,6 +17,10 @@ tokio = { version = "1.26.0", features = ["full"] }
 base64 = "0.21.0"
 sha1 = "0.10.5"
 rand = "0.8.4"
+
+[dev-dependencies]
+deno_core = "0.175.0"
+deno_ops = "0.53.0"
 
 [profile.release]
 opt-level = 3
