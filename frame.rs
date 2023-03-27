@@ -1,3 +1,4 @@
+use tokio::io::AsyncReadExt;
 use tokio::{io::AsyncWriteExt, net::TcpStream};
 
 macro_rules! repr_u8 {
@@ -121,10 +122,13 @@ impl Frame {
     }
   }
 
-  pub async fn writev(
+  pub async fn writev<S>(
     &mut self,
-    stream: &mut TcpStream,
-  ) -> Result<(), std::io::Error> {
+    stream: &mut S,
+  ) -> Result<(), std::io::Error>
+  where
+    S: AsyncReadExt + AsyncWriteExt + Unpin,
+  {
     use std::io::IoSlice;
 
     match self.opcode {

@@ -8,8 +8,8 @@ use tokio::net::TcpStream;
 pub use crate::frame::Frame;
 pub use crate::frame::OpCode;
 
-pub struct WebSocket {
-  stream: TcpStream,
+pub struct WebSocket<S> {
+  stream: S,
   write_buffer: Vec<u8>,
   read_buffer: Option<Vec<u8>>,
   vectored: bool,
@@ -17,8 +17,11 @@ pub struct WebSocket {
   auto_pong: bool,
 }
 
-impl WebSocket {
-  pub fn after_handshake(stream: TcpStream) -> Self {
+impl<S> WebSocket<S> {
+  pub fn after_handshake(stream: S) -> Self
+  where
+    S: AsyncReadExt + AsyncWriteExt + Unpin,
+  {
     Self {
       stream,
       write_buffer: Vec::with_capacity(2),
@@ -44,7 +47,10 @@ impl WebSocket {
   pub async fn write_frame(
     &mut self,
     mut frame: Frame,
-  ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+  ) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
+  where
+    S: AsyncReadExt + AsyncWriteExt + Unpin,
+  {
     if self.vectored {
       frame.writev(&mut self.stream).await?;
     } else {
@@ -57,7 +63,10 @@ impl WebSocket {
 
   pub async fn read_frame(
     &mut self,
-  ) -> Result<Frame, Box<dyn std::error::Error + Send + Sync>> {
+  ) -> Result<Frame, Box<dyn std::error::Error + Send + Sync>>
+  where
+    S: AsyncReadExt + AsyncWriteExt + Unpin,
+  {
     loop {
       let mut frame = self.parse_frame_header().await?;
       frame.unmask();
@@ -86,7 +95,10 @@ impl WebSocket {
 
   async fn parse_frame_header(
     &mut self,
-  ) -> Result<Frame, Box<dyn std::error::Error + Send + Sync>> {
+  ) -> Result<Frame, Box<dyn std::error::Error + Send + Sync>>
+  where
+    S: AsyncReadExt + AsyncWriteExt + Unpin,
+  {
     let mut head = [0; 2 + 4 + 100];
 
     let mut nread = 0;
