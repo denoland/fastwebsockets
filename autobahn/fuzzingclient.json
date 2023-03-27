@@ -1,0 +1,11 @@
+{
+    "outdir": "./reports/servers",
+    "servers": [
+        {
+            "url": "ws://host.docker.internal:8080"
+        }
+    ],
+    "cases": ["1.*", "2.*", "3.*"],
+    "exclude-cases": ["9.*", "10.*", "11.*", "12.*", "13.*"],
+    "exclude-agent-cases": {}
+}
