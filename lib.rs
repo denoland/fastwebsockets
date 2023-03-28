@@ -15,6 +15,7 @@ pub struct WebSocket<S> {
   vectored: bool,
   auto_close: bool,
   auto_pong: bool,
+  max_message_size: usize,
 }
 
 impl<S> WebSocket<S> {
@@ -29,6 +30,7 @@ impl<S> WebSocket<S> {
       vectored: false,
       auto_close: true,
       auto_pong: true,
+      max_message_size: 64 << 20,
     }
   }
 
@@ -42,6 +44,10 @@ impl<S> WebSocket<S> {
 
   pub fn set_auto_pong(&mut self, auto_pong: bool) {
     self.auto_pong = auto_pong;
+  }
+
+  pub fn set_max_message_size(&mut self, max_message_size: usize) {
+    self.max_message_size = max_message_size;
   }
 
   pub async fn write_frame(
@@ -79,15 +85,10 @@ impl<S> WebSocket<S> {
           break Ok(frame);
         }
         OpCode::Ping if self.auto_pong => {
-          dbg!("Ping");
           self.write_frame(Frame::pong(frame.payload)).await?;
         }
-        OpCode::Pong => {
-          dbg!("Pong");
-        }
-        OpCode::Continuation => {
-          dbg!("Continuation");
-        }
+        OpCode::Pong => {}
+        OpCode::Continuation => {}
         _ => break Ok(frame),
       }
     }
@@ -147,6 +148,10 @@ impl<S> WebSocket<S> {
       }
       false => None,
     };
+
+    if length >= self.max_message_size {
+      return Err("Frame too large".into());
+    }
 
     let required = 2 + extra + mask.map(|_| 4).unwrap_or(0) + length;
 

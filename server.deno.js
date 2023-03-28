@@ -1,7 +1,7 @@
 import { serve } from "https://deno.land/std/http/server.ts";
 
 serve(r => {
-    const { socket, response } = Deno.upgradeWebSocket(r);
+    const { socket, response } = Deno.upgradeWebSocket(r, { idleTimeout: 0 });
     socket.onmessage = (e) => {   
         socket.send(e.data);
     }

@@ -13,7 +13,7 @@ path = "examples/echo_server.rs"
 
 [dependencies]
 # tokio = { version = "1.26.0", features = ["rt", "net"] }
-tokio = { version = "1.26.0", features = ["full"] }
+tokio = { version = "1.25.0", features = ["full"] }
 base64 = "0.21.0"
 sha1 = "0.10.5"
 rand = "0.8.4"
