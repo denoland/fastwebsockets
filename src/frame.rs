@@ -53,7 +53,7 @@ macro_rules! repr_u8 {
 }
 
 pub struct Frame {
-  fin: bool,
+  pub fin: bool,
   pub opcode: OpCode,
   mask: Option<[u8; 4]>,
   pub payload: Vec<u8>,
@@ -110,6 +110,14 @@ impl Frame {
       mask: None,
       payload,
     }
+  }
+
+  pub fn is_utf8(&self) -> bool {
+    #[cfg(feature = "simd")]
+    return simdutf8::basic::from_utf8(&self.payload).is_ok();
+
+    #[cfg(not(feature = "simd"))]
+    return std::str::from_utf8(&self.payload).is_ok();
   }
 
   pub fn unmask(&mut self) {
@@ -201,4 +209,9 @@ repr_u8! {
         Ping = 0x9,
         Pong = 0xA,
     }
+}
+
+#[inline]
+pub fn is_control(opcode: OpCode) -> bool {
+  matches!(opcode, OpCode::Close | OpCode::Ping | OpCode::Pong)
 }

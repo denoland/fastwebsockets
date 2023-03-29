@@ -36,14 +36,45 @@ async fn handle_client(
   ws.set_auto_close(true);
   ws.set_auto_pong(true);
 
+  // `sockdeez` lets you handle fragmentation manually
+  // here we just concatenate all fragments, identical to
+  // tungstenite's default behavior.
+  let mut fragments = Vec::new();
+  let mut fragment_opcode = OpCode::Close;
+
   loop {
     let frame = ws.read_frame().await?;
 
     match frame.opcode {
       OpCode::Close => break,
       OpCode::Text | OpCode::Binary => {
-        let frame = Frame::new(true, frame.opcode, None, frame.payload);
-        ws.write_frame(frame).await?;
+        if frame.fin {
+          if !fragments.is_empty() {
+            return Err("Invalid fragment".into());
+          }
+          let frame = Frame::new(true, frame.opcode, None, frame.payload);
+          ws.write_frame(frame).await?;
+        } else {
+          fragments.push(frame.payload);
+          fragment_opcode = frame.opcode;
+        }
+      }
+      OpCode::Continuation => {
+        if fragments.is_empty() {
+          return Err("Invalid continuation frame".into());
+        }
+
+        if fragment_opcode == OpCode::Text && !frame.is_utf8() {
+          return Err("Invalid UTF-8".into());
+        }
+
+        fragments.push(frame.payload);
+        if frame.fin {
+          let frame =
+            Frame::new(true, fragment_opcode, None, fragments.concat());
+          ws.write_frame(frame).await?;
+          fragments.clear();
+        }
       }
       _ => {}
     }

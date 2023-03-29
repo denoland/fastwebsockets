@@ -31,3 +31,5 @@ async fn handle_client(
   Ok(())
 }
 ```
+
+> Fragmentation: sockdeez will give the application raw frames with FIN set unlike tungstenite which will give you a single message with all the frames concatenated. https://github.com/snapview/tungstenite-rs/issues/303 Concanated frames can lead to memory exhaustion so you should process them in the application.
