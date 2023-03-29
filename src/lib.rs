@@ -137,6 +137,15 @@ impl<S> WebSocket<S> {
     }
 
     let fin = head[0] & 0b10000000 != 0;
+
+    let rsv1 = head[0] & 0b01000000 != 0;
+    let rsv2 = head[0] & 0b00100000 != 0;
+    let rsv3 = head[0] & 0b00010000 != 0;
+
+    if rsv1 || rsv2 || rsv3 {
+      return Err("reserved bits are not zero".into());
+    }
+
     let opcode = frame::OpCode::try_from(head[0] & 0b00001111)?;
     let masked = head[1] & 0b10000000 != 0;
 
