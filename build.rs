@@ -13,8 +13,8 @@
 // limitations under the License.
 
 fn main() {
-  println!("cargo:rerun-if-changed=m_arm64_neon.S");
+  println!("cargo:rerun-if-changed=src/m_arm64_neon.S");
   cc::Build::new()
-    .file("m_arm64_neon.S")
+    .file("src/m_arm64_neon.S")
     .compile("libsockdeez_neon.a");
 }

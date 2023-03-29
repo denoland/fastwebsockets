@@ -71,7 +71,7 @@ impl tokio::io::AsyncWrite for ArbitraryByteStream {
 
 fuzz_target!(|data: &[u8]| {
   let (tx, rx) = oneshot::channel();
-  let mut stream = ArbitraryByteStream::new(data.to_vec(), tx);
+  let stream = ArbitraryByteStream::new(data.to_vec(), tx);
 
   let mut ws = sockdeez::WebSocket::after_handshake(stream);
   ws.set_writev(false);
