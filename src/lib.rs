@@ -101,6 +101,13 @@ impl<S> WebSocket<S> {
         OpCode::Ping if self.auto_pong => {
           self.write_frame(Frame::pong(frame.payload)).await?;
         }
+        OpCode::Text => {
+          #[cfg(feature = "simd")]
+          let _ = simdutf8::basic::from_utf8(&frame.payload)?;
+
+          #[cfg(not(feature = "simd"))]
+          let _ = String::from_utf8(frame.payload)?;
+        }
         OpCode::Pong => {}
         OpCode::Continuation => {}
         _ => break Ok(frame),
@@ -162,6 +169,9 @@ impl<S> WebSocket<S> {
       }
       false => None,
     };
+
+    // TODO: control frames must not be fragmented
+    // TODO: fragmentation
 
     if opcode == OpCode::Ping && length > 125 {
       return Err("Ping frame too large".into());
