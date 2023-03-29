@@ -12,6 +12,7 @@ run: build
 		-v ${PWD}/reports:/reports \
 		-p 9001:9001 \
 		--net=host \
+		--rm \
 		$(AUTOBAHN_TESTSUITE_DOCKER) \
 	  wstest -m fuzzingclient -s fuzzingclient.json
 	../target/release/examples/echo_server
