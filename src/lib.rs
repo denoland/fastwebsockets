@@ -107,6 +107,8 @@ impl<S> WebSocket<S> {
 
           #[cfg(not(feature = "simd"))]
           let _ = String::from_utf8(frame.payload)?;
+
+          break Ok(frame);
         }
         OpCode::Pong => {}
         OpCode::Continuation => {}
