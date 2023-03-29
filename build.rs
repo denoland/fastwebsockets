@@ -12,9 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#[cfg(target_arch = "aarch64")]
 fn main() {
   println!("cargo:rerun-if-changed=src/m_arm64_neon.S");
   cc::Build::new()
     .file("src/m_arm64_neon.S")
     .compile("libsockdeez_neon.a");
 }
+
+#[cfg(not(target_arch = "aarch64"))]
+fn main() {}
