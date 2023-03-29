@@ -15,10 +15,16 @@
 use base64;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
-use sha1::{Digest, Sha1};
-use sockdeez::{Frame, OpCode, WebSocket};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::{TcpListener, TcpStream};
+use sha1::Digest;
+use sha1::Sha1;
+use sockdeez::Frame;
+use sockdeez::OpCode;
+use sockdeez::WebSocket;
+use tokio::io::AsyncBufReadExt;
+use tokio::io::AsyncWriteExt;
+use tokio::io::BufReader;
+use tokio::net::TcpListener;
+use tokio::net::TcpStream;
 
 async fn handle_client(
   socket: TcpStream,

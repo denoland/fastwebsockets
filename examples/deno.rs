@@ -20,12 +20,18 @@ use deno_core::op;
 use deno_core::serde_v8;
 use deno_core::v8;
 use deno_core::JsRuntime;
-use sha1::{Digest, Sha1};
-use sockdeez::{Frame, OpCode, WebSocket};
+use sha1::Digest;
+use sha1::Sha1;
+use sockdeez::Frame;
+use sockdeez::OpCode;
+use sockdeez::WebSocket;
 use std::env;
 use std::future::Future;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::io::AsyncBufReadExt;
+use tokio::io::AsyncWriteExt;
+use tokio::io::BufReader;
+use tokio::net::TcpListener;
+use tokio::net::TcpStream;
 
 async fn handle_client(
   socket: TcpStream,
