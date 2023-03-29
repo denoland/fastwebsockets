@@ -427,6 +427,7 @@ name = "sockdeez"
 version = "0.1.0"
 dependencies = [
  "base64",
+ "cc",
  "rand",
  "sha1",
  "tokio",

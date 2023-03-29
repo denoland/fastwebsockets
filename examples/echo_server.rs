@@ -1,3 +1,17 @@
+// Copyright 2023 Divy Srivastava <dj.srivastava23@gmail.com>
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use base64;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
@@ -7,9 +21,9 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 
 async fn handle_client(
-  mut socket: TcpStream,
+  socket: TcpStream,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-  handshake(&mut socket).await?;
+  let socket = handshake(socket).await?;
 
   let mut ws = WebSocket::after_handshake(socket);
   ws.set_writev(false);
@@ -19,12 +33,13 @@ async fn handle_client(
   loop {
     let frame = ws.read_frame().await?;
 
-    match frame {
+    match frame.opcode {
       OpCode::Close => break,
       OpCode::Text | OpCode::Binary => {
         let frame = Frame::new(true, frame.opcode, None, frame.payload);
         ws.write_frame(frame).await?;
       }
+      _ => {}
     }
   }
 
@@ -32,8 +47,8 @@ async fn handle_client(
 }
 
 async fn handshake(
-  socket: &mut TcpStream,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+  mut socket: TcpStream,
+) -> Result<TcpStream, Box<dyn std::error::Error + Send + Sync>> {
   let mut reader = BufReader::new(&mut socket);
   let mut headers = Vec::new();
   loop {
@@ -48,7 +63,7 @@ async fn handshake(
   let key = extract_key(headers)?;
   let response = generate_response(&key);
   socket.write_all(response.as_bytes()).await?;
-  Ok(())
+  Ok(socket)
 }
 
 fn extract_key(

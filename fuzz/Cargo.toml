@@ -27,3 +27,9 @@ name = "parse_frame"
 path = "fuzz_targets/parse_frame.rs"
 test = false
 doc = false
+
+[[bin]]
+name = "unmask"
+path = "fuzz_targets/unmask.rs"
+test = false
+doc = false

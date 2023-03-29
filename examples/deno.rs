@@ -1,3 +1,17 @@
+// Copyright 2023 Divy Srivastava <dj.srivastava23@gmail.com>
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use base64;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
@@ -5,20 +19,11 @@ use deno_core::error::AnyError;
 use deno_core::op;
 use deno_core::serde_v8;
 use deno_core::v8;
-use deno_core::AsyncRefCell;
-use deno_core::AsyncResult;
 use deno_core::JsRuntime;
-use deno_core::OpState;
-use deno_core::Resource;
-use deno_core::ResourceId;
-use deno_core::ZeroCopyBuf;
 use sha1::{Digest, Sha1};
 use sockdeez::{Frame, OpCode, WebSocket};
-use std::cell::RefCell;
 use std::env;
 use std::future::Future;
-use std::net::SocketAddr;
-use std::rc::Rc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 
@@ -124,8 +129,6 @@ fn op_serve(
           }
         });
       }
-
-      Ok::<(), AnyError>(())
     })
     .await?
   })
