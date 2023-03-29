@@ -163,13 +163,17 @@ impl<S> WebSocket<S> {
       false => None,
     };
 
+    if opcode == OpCode::Ping && length > 125 {
+      return Err("Ping frame too large".into());
+    }
+
     if length >= self.max_message_size {
       return Err("Frame too large".into());
     }
 
     let required = 2 + extra + mask.map(|_| 4).unwrap_or(0) + length;
 
-    if required > head.len() {
+    if required > nread {
       // Allocate more space
       let mut new_head = head.to_vec();
       new_head.resize(required, 0);
@@ -182,9 +186,7 @@ impl<S> WebSocket<S> {
         mask,
         new_head[required - length..].to_vec(),
       ));
-    }
-
-    if nread > required {
+    } else if nread > required {
       // We read too much
       self.read_buffer = Some(head[required..nread].to_vec());
     }
