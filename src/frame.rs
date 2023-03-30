@@ -184,17 +184,6 @@ impl Frame {
     let size = self.fmt_head(buf);
     buf[size..size + len].copy_from_slice(&self.payload);
     &buf[..size + len]
-    // match self.opcode {
-    //     OpCode::Text | OpCode::Binary | OpCode::Close => {
-    //         let len = self.payload.len();
-    //         reserve_enough(buf, len + MAX_HEAD_SIZE);
-
-    //         let size = self.fmt_head(buf);
-    //         buf[size..size + len].copy_from_slice(&self.payload);
-    //         &buf[..size + len]
-    //     },
-    //     _ => todo!(),
-    // }
   }
 }
 
