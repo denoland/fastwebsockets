@@ -1,6 +1,8 @@
 _sockdeez_ is a fast WebSocket server implementation.
 
-Passes the Autobahn Test Suite and fuzzed with LLVM's libfuzzer
+Passes the
+Autobahn|TestSuite<sup><a href="https://littledivy.github.io/sockdeez/servers/">1</a></sup>
+and fuzzed with LLVM's libfuzzer.
 
 You can use it as a raw websocket frame parser and deal with spec compliance
 yourself, or you can use it as a full-fledged websocket server.
