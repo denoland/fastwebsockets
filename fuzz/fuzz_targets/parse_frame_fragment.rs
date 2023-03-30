@@ -81,7 +81,7 @@ fuzz_target!(|data: &[u8]| {
   ws.set_auto_pong(true);
   ws.set_max_message_size(u16::MAX as usize);
 
-  let mut ws = sockdeez::FragmentController::new(ws);
+  let mut ws = sockdeez::FragmentCollector::new(ws);
 
   futures::executor::block_on(async move {
     tokio::select! {

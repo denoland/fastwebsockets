@@ -20,7 +20,7 @@ mod mask;
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
 
-pub use crate::fragment::FragmentController;
+pub use crate::fragment::FragmentCollector;
 pub use crate::frame::Frame;
 pub use crate::frame::OpCode;
 pub use crate::mask::unmask;

@@ -32,18 +32,18 @@ impl Fragment {
   }
 }
 
-pub struct FragmentController<S> {
+pub struct FragmentCollector<S> {
   ws: WebSocket<S>,
   fragments: Option<Fragment>,
   opcode: OpCode,
 }
 
-impl<S> FragmentController<S> {
-  pub fn new(ws: WebSocket<S>) -> FragmentController<S>
+impl<S> FragmentCollector<S> {
+  pub fn new(ws: WebSocket<S>) -> FragmentCollector<S>
   where
     S: AsyncReadExt + AsyncWriteExt + Unpin,
   {
-    FragmentController {
+    FragmentCollector {
       ws,
       fragments: None,
       opcode: OpCode::Close,

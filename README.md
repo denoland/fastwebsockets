@@ -36,15 +36,15 @@ async fn handle_client(
 
 **Fragmentation**
 
-By default, sockdeez will give the application raw frames with FIN set. Other crates like
-tungstenite which will give you a single message with all the frames
+By default, sockdeez will give the application raw frames with FIN set. Other
+crates like tungstenite which will give you a single message with all the frames
 concatenated.
 
-For concanated frames, use `FragmentController`:
+For concanated frames, use `FragmentCollector`:
 
 ```rust
 let mut ws = WebSocket::after_handshake(socket);
-let mut ws = FragmentController::new(ws);
+let mut ws = FragmentCollector::new(ws);
 
 let incoming = ws.read_frame().await?;
 // Always returns full messages
@@ -52,4 +52,3 @@ assert!(incoming.fin);
 ```
 
 > permessage-deflate is not supported yet.
-

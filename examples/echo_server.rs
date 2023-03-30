@@ -35,7 +35,7 @@ async fn handle_client(
   ws.set_auto_close(true);
   ws.set_auto_pong(true);
 
-  let mut ws = sockdeez::FragmentController::new(ws);
+  let mut ws = sockdeez::FragmentCollector::new(ws);
 
   loop {
     let frame = ws.read_frame().await?;
