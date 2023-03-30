@@ -34,10 +34,22 @@ async fn handle_client(
 }
 ```
 
-> Fragmentation: sockdeez will give the application raw frames with FIN set
-> unlike tungstenite which will give you a single message with all the frames
-> concatenated. https://github.com/snapview/tungstenite-rs/issues/303 Concanated
-> frames can lead to memory exhaustion so you should process them in the
-> application.
+**Fragmentation**
+
+By default, sockdeez will give the application raw frames with FIN set. Other crates like
+tungstenite which will give you a single message with all the frames
+concatenated.
+
+For concanated frames, use `FragmentController`:
+
+```rust
+let mut ws = WebSocket::after_handshake(socket);
+let mut ws = FragmentController::new(ws);
+
+let incoming = ws.read_frame().await?;
+// Always returns full messages
+assert!(incoming.fin);
+```
 
 > permessage-deflate is not supported yet.
+
