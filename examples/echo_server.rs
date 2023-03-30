@@ -17,7 +17,6 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use sha1::Digest;
 use sha1::Sha1;
-use sockdeez::Frame;
 use sockdeez::OpCode;
 use sockdeez::WebSocket;
 use tokio::io::AsyncBufReadExt;
@@ -25,20 +24,6 @@ use tokio::io::AsyncWriteExt;
 use tokio::io::BufReader;
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
-
-enum Fragment {
-  Text(Option<utf8::Incomplete>, Vec<u8>),
-  Binary(Vec<u8>),
-}
-
-impl Fragment {
-  fn take_buffer(self) -> Vec<u8> {
-    match self {
-      Fragment::Text(_, buffer) => buffer,
-      Fragment::Binary(buffer) => buffer,
-    }
-  }
-}
 
 async fn handle_client(
   socket: TcpStream,
@@ -50,111 +35,15 @@ async fn handle_client(
   ws.set_auto_close(true);
   ws.set_auto_pong(true);
 
-  // `sockdeez` lets you handle fragmentation manually
-  // here we just concatenate all fragments, identical to
-  // tungstenite's default behavior.
-  let mut fragments = None;
-  let mut fragment_opcode = OpCode::Close;
+  let mut ws = sockdeez::FragmentController::new(ws);
 
   loop {
     let frame = ws.read_frame().await?;
     match frame.opcode {
       OpCode::Close => break,
       OpCode::Text | OpCode::Binary => {
-        if frame.fin {
-          if fragments.is_some() {
-            return Err("Invalid fragment".into());
-          }
-          let frame = Frame::new(true, frame.opcode, None, frame.payload);
-          ws.write_frame(frame).await?;
-        } else {
-          fragments = match frame.opcode {
-            OpCode::Text => match utf8::decode(&frame.payload) {
-              Ok(text) => Some(Fragment::Text(None, text.as_bytes().to_vec())),
-              Err(utf8::DecodeError::Incomplete {
-                valid_prefix,
-                incomplete_suffix,
-              }) => Some(Fragment::Text(
-                Some(incomplete_suffix),
-                valid_prefix.as_bytes().to_vec(),
-              )),
-              Err(utf8::DecodeError::Invalid { .. }) => {
-                return Err("Invalid UTF-8".into());
-              }
-            },
-            OpCode::Binary => Some(Fragment::Binary(frame.payload)),
-            _ => unreachable!(),
-          };
-          fragment_opcode = frame.opcode;
-        }
+        ws.write_frame(frame).await?;
       }
-      OpCode::Continuation => match fragments.as_mut() {
-        None => {
-          return Err("Invalid continuation frame".into());
-        }
-        Some(Fragment::Text(data, input)) => {
-          let mut tail = &frame.payload[..];
-          if let Some(mut incomplete) = data.take() {
-            if let Some((result, rest)) =
-              incomplete.try_complete(&frame.payload)
-            {
-              tail = rest;
-              match result {
-                Ok(text) => {
-                  input.extend_from_slice(text.as_bytes());
-                }
-                Err(_) => {
-                  return Err("Invalid UTF-8".into());
-                }
-              }
-            } else {
-              tail = &[];
-              data.replace(incomplete);
-            }
-          }
-
-          match utf8::decode(tail) {
-            Ok(text) => {
-              input.extend_from_slice(text.as_bytes());
-            }
-            Err(utf8::DecodeError::Incomplete {
-              valid_prefix,
-              incomplete_suffix,
-            }) => {
-              input.extend_from_slice(valid_prefix.as_bytes());
-              *data = Some(incomplete_suffix);
-            }
-            Err(utf8::DecodeError::Invalid { valid_prefix, .. }) => {
-              input.extend_from_slice(valid_prefix.as_bytes());
-              return Err("Invalid UTF-8".into());
-            }
-          }
-
-          if frame.fin {
-            let frame = Frame::new(
-              true,
-              fragment_opcode,
-              None,
-              fragments.take().unwrap().take_buffer(),
-            );
-            ws.write_frame(frame).await?;
-            fragments = None;
-          }
-        }
-        Some(Fragment::Binary(data)) => {
-          data.extend_from_slice(&frame.payload);
-          if frame.fin {
-            let frame = Frame::new(
-              true,
-              fragment_opcode,
-              None,
-              fragments.take().unwrap().take_buffer(),
-            );
-            ws.write_frame(frame).await?;
-            fragments = None;
-          }
-        }
-      },
       _ => {}
     }
   }

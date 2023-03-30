@@ -13,12 +13,14 @@
 // limitations under the License.
 
 mod close;
+mod fragment;
 mod frame;
 mod mask;
 
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
 
+pub use crate::fragment::FragmentController;
 pub use crate::frame::Frame;
 pub use crate::frame::OpCode;
 pub use crate::mask::unmask;
