@@ -26,6 +26,20 @@ use tokio::io::BufReader;
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
 
+enum Fragment {
+  Text(Option<utf8::Incomplete>, Vec<u8>),
+  Binary(Vec<u8>),
+}
+
+impl Fragment {
+  fn take_buffer(self) -> Vec<u8> {
+    match self {
+      Fragment::Text(_, buffer) => buffer,
+      Fragment::Binary(buffer) => buffer,
+    }
+  }
+}
+
 async fn handle_client(
   socket: TcpStream,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -39,43 +53,108 @@ async fn handle_client(
   // `sockdeez` lets you handle fragmentation manually
   // here we just concatenate all fragments, identical to
   // tungstenite's default behavior.
-  let mut fragments = Vec::new();
+  let mut fragments = None;
   let mut fragment_opcode = OpCode::Close;
 
   loop {
     let frame = ws.read_frame().await?;
-
     match frame.opcode {
       OpCode::Close => break,
       OpCode::Text | OpCode::Binary => {
         if frame.fin {
-          if !fragments.is_empty() {
+          if fragments.is_some() {
             return Err("Invalid fragment".into());
           }
           let frame = Frame::new(true, frame.opcode, None, frame.payload);
           ws.write_frame(frame).await?;
         } else {
-          fragments.push(frame.payload);
+          fragments = match frame.opcode {
+            OpCode::Text => match utf8::decode(&frame.payload) {
+              Ok(text) => Some(Fragment::Text(None, text.as_bytes().to_vec())),
+              Err(utf8::DecodeError::Incomplete {
+                valid_prefix,
+                incomplete_suffix,
+              }) => Some(Fragment::Text(
+                Some(incomplete_suffix),
+                valid_prefix.as_bytes().to_vec(),
+              )),
+              Err(utf8::DecodeError::Invalid { valid_prefix, .. }) => {
+                return Err("Invalid UTF-8".into());
+              }
+            },
+            OpCode::Binary => Some(Fragment::Binary(frame.payload)),
+            _ => unreachable!(),
+          };
           fragment_opcode = frame.opcode;
         }
       }
-      OpCode::Continuation => {
-        if fragments.is_empty() {
+      OpCode::Continuation => match fragments.as_mut() {
+        None => {
           return Err("Invalid continuation frame".into());
         }
+        Some(Fragment::Text(data, input)) => {
+          let mut tail = &frame.payload[..];
+          if let Some(mut incomplete) = data.take() {
+            if let Some((result, rest)) =
+              incomplete.try_complete(&frame.payload)
+            {
+              tail = rest;
+              match result {
+                Ok(text) => {
+                  input.extend_from_slice(text.as_bytes());
+                }
+                Err(_) => {
+                  return Err("Invalid UTF-8".into());
+                }
+              }
+            } else {
+              tail = &[];
+              data.replace(incomplete);
+            }
+          }
 
-        if fragment_opcode == OpCode::Text && !frame.is_utf8() {
-          return Err("Invalid UTF-8".into());
-        }
+          match utf8::decode(tail) {
+            Ok(text) => {
+              input.extend_from_slice(text.as_bytes());
+            }
+            Err(utf8::DecodeError::Incomplete {
+              valid_prefix,
+              incomplete_suffix,
+            }) => {
+              input.extend_from_slice(valid_prefix.as_bytes());
+              *data = Some(incomplete_suffix);
+            }
+            Err(utf8::DecodeError::Invalid { valid_prefix, .. }) => {
+              input.extend_from_slice(valid_prefix.as_bytes());
+              return Err("Invalid UTF-8".into());
+            }
+          }
 
-        fragments.push(frame.payload);
-        if frame.fin {
-          let frame =
-            Frame::new(true, fragment_opcode, None, fragments.concat());
-          ws.write_frame(frame).await?;
-          fragments.clear();
+          if frame.fin {
+            let frame = Frame::new(
+              true,
+              fragment_opcode,
+              None,
+              fragments.take().unwrap().take_buffer(),
+            );
+            ws.write_frame(frame).await?;
+            fragments = None;
+          }
         }
-      }
+        Some(Fragment::Binary(data)) => {
+          data.extend_from_slice(&frame.payload);
+          if frame.fin {
+            let frame = Frame::new(
+              true,
+              fragment_opcode,
+              None,
+              fragments.take().unwrap().take_buffer(),
+            );
+            ws.write_frame(frame).await?;
+            fragments = None;
+          }
+        }
+      },
       _ => {}
     }
   }

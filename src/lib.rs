@@ -102,7 +102,7 @@ impl<S> WebSocket<S> {
           self.write_frame(Frame::pong(frame.payload)).await?;
         }
         OpCode::Text => {
-          if !frame.is_utf8() {
+          if frame.fin && !frame.is_utf8() {
             break Err("invalid utf-8".into());
           }
 
