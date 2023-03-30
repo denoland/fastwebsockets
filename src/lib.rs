@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod close;
 mod frame;
 mod mask;
 
@@ -93,6 +94,31 @@ impl<S> WebSocket<S> {
 
       match frame.opcode {
         OpCode::Close if self.auto_close => {
+          match frame.payload.len() {
+            0 => {}
+            1 => return Err("invalid close frame".into()),
+            _ => {
+              let code = close::CloseCode::from(u16::from_be_bytes(
+                frame.payload[0..2].try_into().unwrap(),
+              ));
+
+              #[cfg(feature = "simd")]
+              simdutf8::basic::from_utf8(&frame.payload[2..])?;
+
+              #[cfg(not(feature = "simd"))]
+              std::str::from_utf8(&frame.payload[2..])?;
+
+              if !code.is_allowed() {
+                let mut payload = u16::to_be_bytes(1002).to_vec();
+
+                payload.extend_from_slice(&frame.payload[2..]);
+                self.write_frame(Frame::close(payload)).await?;
+
+                return Err("invalid close code".into());
+              }
+            }
+          };
+
           self
             .write_frame(Frame::close(frame.payload.clone()))
             .await?;

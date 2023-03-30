@@ -2,10 +2,11 @@
     "outdir": "./reports/servers",
     "servers": [
         {
+            "agent": "sockdeez",
             "url": "ws://host.docker.internal:8080"
         }
     ],
-    "cases": ["1.*", "2.*", "3.*", "4.*", "5.*", "6.*", "7.*"],
-    "exclude-cases": ["10.*", "11.*", "12.*", "13.*"],
+    "cases": ["1.*", "2.*", "3.*", "4.*", "5.*", "6.*", "7.*", "9.*", "10.*"],
+    "exclude-cases": ["11.*", "12.*", "13.*"],
     "exclude-agent-cases": {}
 }

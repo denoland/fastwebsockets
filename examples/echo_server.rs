@@ -78,7 +78,7 @@ async fn handle_client(
                 Some(incomplete_suffix),
                 valid_prefix.as_bytes().to_vec(),
               )),
-              Err(utf8::DecodeError::Invalid { valid_prefix, .. }) => {
+              Err(utf8::DecodeError::Invalid { .. }) => {
                 return Err("Invalid UTF-8".into());
               }
             },
