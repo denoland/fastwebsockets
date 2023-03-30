@@ -34,6 +34,10 @@ async fn handle_client(
 }
 ```
 
-> Fragmentation: sockdeez will give the application raw frames with FIN set unlike tungstenite which will give you a single message with all the frames concatenated. https://github.com/snapview/tungstenite-rs/issues/303 Concanated frames can lead to memory exhaustion so you should process them in the application.
+> Fragmentation: sockdeez will give the application raw frames with FIN set
+> unlike tungstenite which will give you a single message with all the frames
+> concatenated. https://github.com/snapview/tungstenite-rs/issues/303 Concanated
+> frames can lead to memory exhaustion so you should process them in the
+> application.
 
 > permessage-deflate is not supported yet.
