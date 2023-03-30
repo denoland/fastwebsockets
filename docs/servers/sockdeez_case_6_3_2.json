@@ -1,0 +1,541 @@
+{
+   "agent": "sockdeez",
+   "behavior": "OK",
+   "behaviorClose": "OK",
+   "case": 73,
+   "closedByMe": false,
+   "createStats": true,
+   "createWirelog": true,
+   "description": "Send invalid UTF-8 text message in fragments of 1 octet, resulting in frames ending on positions which are not code point ends.<br><br>MESSAGE:<br>cebae1bdb9cf83cebcceb5eda080656469746564",
+   "droppedByMe": false,
+   "duration": 40,
+   "expectation": "The connection is failed immediately, since the payload is not valid UTF-8.",
+   "expected": {
+      "OK": []
+   },
+   "expectedClose": {
+      "closeCode": [
+         1007
+      ],
+      "closedByMe": false,
+      "closedByWrongEndpointIsFatal": true,
+      "requireClean": false
+   },
+   "failedByMe": false,
+   "httpRequest": "GET / HTTP/1.1\r\nUser-Agent: AutobahnTestSuite/0.8.2-0.10.9\r\nHost: host.docker.internal:8080\r\nUpgrade: WebSocket\r\nConnection: Upgrade\r\nPragma: no-cache\r\nCache-Control: no-cache\r\nSec-WebSocket-Key: 9PX7ab10lv2HQ0lwVXzLuQ==\r\nSec-WebSocket-Version: 13\r\n\r\n",
+   "httpResponse": "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: abe+Xawdk6sxs7nXGO8xjVtyxls=\r\n\r\n",
+   "id": "6.3.2",
+   "isServer": false,
+   "localCloseCode": null,
+   "localCloseReason": null,
+   "received": [],
+   "remoteCloseCode": null,
+   "remoteCloseReason": null,
+   "reportCompressionRatio": false,
+   "reportTime": false,
+   "result": "Actual events match at least one expected.",
+   "resultClose": "Connection was properly closed",
+   "rxFrameStats": {},
+   "rxOctetStats": {
+      "129": 1
+   },
+   "started": "2023-03-30T10:03:06.710Z",
+   "trafficStats": null,
+   "txFrameStats": {
+      "0": 20,
+      "1": 1
+   },
+   "txOctetStats": {
+      "6": 1,
+      "7": 20,
+      "251": 1
+   },
+   "wasClean": false,
+   "wasCloseHandshakeTimeout": false,
+   "wasNotCleanReason": "peer dropped the TCP connection without previous WebSocket closing handshake",
+   "wasOpenHandshakeTimeout": false,
+   "wasServerConnectionDropTimeout": false,
+   "wirelog": [
+      [
+         "TO",
+         [
+            251,
+            "474554202f20485454502f312e310d0a557365722d4167656e743a204175746f6261686e5465737453756974652f302e382e322d302e31302e390d0a486f7374 ..."
+         ],
+         false
+      ],
+      [
+         "RO",
+         [
+            129,
+            "485454502f312e312031303120537769746368696e672050726f746f636f6c730d0a557067726164653a20776562736f636b65740d0a436f6e6e656374696f6e ..."
+         ]
+      ],
+      [
+         "TF",
+         [
+            1,
+            "0xce"
+         ],
+         1,
+         false,
+         0,
+         "f6667b46",
+         null,
+         null,
+         false
+      ],
+      [
+         "TO",
+         [
+            7,
+            "0181f6667b4638"
+         ],
+         false
+      ],
+      [
+         "TF",
+         [
+            1,
+            "0xba"
+         ],
+         0,
+         false,
+         0,
+         "7d3e8e1f",
+         null,
+         null,
+         false
+      ],
+      [
+         "TO",
+         [
+            7,
+            "00817d3e8e1fc7"
+         ],
+         false
+      ],
+      [
+         "TF",
+         [
+            1,
+            "0xe1"
+         ],
+         0,
+         false,
+         0,
+         "9c4ed00a",
+         null,
+         null,
+         false
+      ],
+      [
+         "TO",
+         [
+            7,
+            "00819c4ed00a7d"
+         ],
+         false
+      ],
+      [
+         "TF",
+         [
+            1,
+            "0xbd"
+         ],
+         0,
+         false,
+         0,
+         "be1f9e19",
+         null,
+         null,
+         false
+      ],
+      [
+         "TO",
+         [
+            7,
+            "0081be1f9e1903"
+         ],
+         false
+      ],
+      [
+         "TF",
+         [
+            1,
+            "0xb9"
+         ],
+         0,
+         false,
+         0,
+         "7e1ee757",
+         null,
+         null,
+         false
+      ],
+      [
+         "TO",
+         [
+            7,
+            "00817e1ee757c7"
+         ],
+         false
+      ],
+      [
+         "TF",
+         [
+            1,
+            "0xcf"
+         ],
+         0,
+         false,
+         0,
+         "d81b6b2b",
+         null,
+         null,
+         false
+      ],
+      [
+         "TO",
+         [
+            7,
+            "0081d81b6b2b17"
+         ],
+         false
+      ],
+      [
+         "TF",
+         [
+            1,
+            "0x83"
+         ],
+         0,
+         false,
+         0,
+         "2a331088",
+         null,
+         null,
+         false
+      ],
+      [
+         "TO",
+         [
+            7,
+            "00812a331088a9"
+         ],
+         false
+      ],
+      [
+         "TF",
+         [
+            1,
+            "0xce"
+         ],
+         0,
+         false,
+         0,
+         "fa0fbbaa",
+         null,
+         null,
+         false
+      ],
+      [
+         "TO",
+         [
+            7,
+            "0081fa0fbbaa34"
+         ],
+         false
+      ],
+      [
+         "TF",
+         [
+            1,
+            "0xbc"
+         ],
+         0,
+         false,
+         0,
+         "9c8e5216",
+         null,
+         null,
+         false
+      ],
+      [
+         "TO",
+         [
+            7,
+            "00819c8e521620"
+         ],
+         false
+      ],
+      [
+         "TF",
+         [
+            1,
+            "0xce"
+         ],
+         0,
+         false,
+         0,
+         "73d348c9",
+         null,
+         null,
+         false
+      ],
+      [
+         "TO",
+         [
+            7,
+            "008173d348c9bd"
+         ],
+         false
+      ],
+      [
+         "TF",
+         [
+            1,
+            "0xb5"
+         ],
+         0,
+         false,
+         0,
+         "62d47b4a",
+         null,
+         null,
+         false
+      ],
+      [
+         "TO",
+         [
+            7,
+            "008162d47b4ad7"
+         ],
+         false
+      ],
+      [
+         "TF",
+         [
+            1,
+            "0xed"
+         ],
+         0,
+         false,
+         0,
+         "6608759c",
+         null,
+         null,
+         false
+      ],
+      [
+         "TO",
+         [
+            7,
+            "00816608759c8b"
+         ],
+         false
+      ],
+      [
+         "TF",
+         [
+            1,
+            "0xa0"
+         ],
+         0,
+         false,
+         0,
+         "f734a566",
+         null,
+         null,
+         false
+      ],
+      [
+         "TO",
+         [
+            7,
+            "0081f734a56657"
+         ],
+         false
+      ],
+      [
+         "TF",
+         [
+            1,
+            "0x80"
+         ],
+         0,
+         false,
+         0,
+         "2d8abe52",
+         null,
+         null,
+         false
+      ],
+      [
+         "TO",
+         [
+            7,
+            "00812d8abe52ad"
+         ],
+         false
+      ],
+      [
+         "TF",
+         [
+            1,
+            "e"
+         ],
+         0,
+         false,
+         0,
+         "8c7f66dc",
+         null,
+         null,
+         false
+      ],
+      [
+         "TO",
+         [
+            7,
+            "00818c7f66dce9"
+         ],
+         false
+      ],
+      [
+         "TF",
+         [
+            1,
+            "d"
+         ],
+         0,
+         false,
+         0,
+         "1d50a6c7",
+         null,
+         null,
+         false
+      ],
+      [
+         "TO",
+         [
+            7,
+            "00811d50a6c779"
+         ],
+         false
+      ],
+      [
+         "TF",
+         [
+            1,
+            "i"
+         ],
+         0,
+         false,
+         0,
+         "b9518bee",
+         null,
+         null,
+         false
+      ],
+      [
+         "TO",
+         [
+            7,
+            "0081b9518beed0"
+         ],
+         false
+      ],
+      [
+         "TF",
+         [
+            1,
+            "t"
+         ],
+         0,
+         false,
+         0,
+         "a6cf3ecc",
+         null,
+         null,
+         false
+      ],
+      [
+         "TO",
+         [
+            7,
+            "0081a6cf3eccd2"
+         ],
+         false
+      ],
+      [
+         "TF",
+         [
+            1,
+            "e"
+         ],
+         0,
+         false,
+         0,
+         "39338ecc",
+         null,
+         null,
+         false
+      ],
+      [
+         "TO",
+         [
+            7,
+            "008139338ecc5c"
+         ],
+         false
+      ],
+      [
+         "TF",
+         [
+            1,
+            "d"
+         ],
+         0,
+         false,
+         0,
+         "f7a5673a",
+         null,
+         null,
+         false
+      ],
+      [
+         "TO",
+         [
+            7,
+            "0081f7a5673a93"
+         ],
+         false
+      ],
+      [
+         "TF",
+         [
+            0,
+            ""
+         ],
+         0,
+         true,
+         0,
+         "e362137c",
+         null,
+         null,
+         false
+      ],
+      [
+         "TO",
+         [
+            6,
+            "8080e362137c"
+         ],
+         false
+      ],
+      [
+         "KL",
+         1
+      ]
+   ]
+}

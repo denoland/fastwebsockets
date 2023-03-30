@@ -1,0 +1,175 @@
+{
+   "agent": "UnknownServer",
+   "behavior": "NON-STRICT",
+   "behaviorClose": "OK",
+   "case": 76,
+   "closedByMe": false,
+   "createStats": true,
+   "createWirelog": true,
+   "description": "Same as Case 6.4.1, but we send message not in 3 frames, but in 3 chops of the same message frame.\n<br><br>MESSAGE PARTS:<br>\nPART1 = cebae1bdb9cf83cebcceb5<br>\nPART2 = f4908080<br>\nPART3 = 656469746564<br>\n",
+   "droppedByMe": false,
+   "duration": 2029,
+   "expectation": "The first chop is accepted, we expect to timeout on the first wait. The 2nd chop should be rejected immediately (fail fast on UTF-8). If we timeout, we expect the connection is failed at least then, since the complete message payload is not valid UTF-8.",
+   "expected": {
+      "NON-STRICT": [
+         [
+            "timeout",
+            "A"
+         ],
+         [
+            "timeout",
+            "B"
+         ]
+      ],
+      "OK": [
+         [
+            "timeout",
+            "A"
+         ]
+      ]
+   },
+   "expectedClose": {
+      "closeCode": [
+         1007
+      ],
+      "closedByMe": false,
+      "closedByWrongEndpointIsFatal": true,
+      "requireClean": false
+   },
+   "failedByMe": false,
+   "httpRequest": "GET / HTTP/1.1\r\nUser-Agent: AutobahnTestSuite/0.8.2-0.10.9\r\nHost: host.docker.internal:8080\r\nUpgrade: WebSocket\r\nConnection: Upgrade\r\nPragma: no-cache\r\nCache-Control: no-cache\r\nSec-WebSocket-Key: wpoxhmU4zbZsaJ8Ii7KuSw==\r\nSec-WebSocket-Version: 13\r\n\r\n",
+   "httpResponse": "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: EzgCwlVbTiVZtVt8sILtf5/kJf8=\r\n\r\n",
+   "id": "6.4.3",
+   "isServer": false,
+   "localCloseCode": null,
+   "localCloseReason": null,
+   "received": [
+      [
+         "timeout",
+         "A"
+      ],
+      [
+         "timeout",
+         "B"
+      ]
+   ],
+   "remoteCloseCode": null,
+   "remoteCloseReason": null,
+   "reportCompressionRatio": false,
+   "reportTime": false,
+   "result": "Actual events match at least one expected.",
+   "resultClose": "Connection was properly closed",
+   "rxFrameStats": {},
+   "rxOctetStats": {
+      "129": 1
+   },
+   "started": "2023-03-30T07:17:13.603Z",
+   "trafficStats": null,
+   "txFrameStats": {
+      "0": 1
+   },
+   "txOctetStats": {
+      "4": 1,
+      "6": 3,
+      "11": 1,
+      "251": 1
+   },
+   "wasClean": false,
+   "wasCloseHandshakeTimeout": false,
+   "wasNotCleanReason": "peer dropped the TCP connection without previous WebSocket closing handshake",
+   "wasOpenHandshakeTimeout": false,
+   "wasServerConnectionDropTimeout": false,
+   "wirelog": [
+      [
+         "TO",
+         [
+            251,
+            "474554202f20485454502f312e310d0a557365722d4167656e743a204175746f6261686e5465737453756974652f302e382e322d302e31302e390d0a486f7374 ..."
+         ],
+         false
+      ],
+      [
+         "RO",
+         [
+            129,
+            "485454502f312e312031303120537769746368696e672050726f746f636f6c730d0a557067726164653a20776562736f636b65740d0a436f6e6e656374696f6e ..."
+         ]
+      ],
+      [
+         "TO",
+         [
+            6,
+            "019502145764"
+         ],
+         false
+      ],
+      [
+         "TO",
+         [
+            11,
+            "ccaeb6d9bbdbd4aabedae2"
+         ],
+         false
+      ],
+      [
+         "CT",
+         1,
+         "A"
+      ],
+      [
+         "CTE",
+         "A"
+      ],
+      [
+         "TO",
+         [
+            4,
+            "909294d7"
+         ],
+         false
+      ],
+      [
+         "CT",
+         1,
+         "B"
+      ],
+      [
+         "CTE",
+         "B"
+      ],
+      [
+         "TO",
+         [
+            6,
+            "01667d230166"
+         ],
+         false
+      ],
+      [
+         "TF",
+         [
+            0,
+            ""
+         ],
+         0,
+         true,
+         0,
+         "ceea304c",
+         null,
+         null,
+         false
+      ],
+      [
+         "TO",
+         [
+            6,
+            "8080ceea304c"
+         ],
+         false
+      ],
+      [
+         "KL",
+         1
+      ]
+   ]
+}

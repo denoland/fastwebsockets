@@ -1,0 +1,122 @@
+{
+   "agent": "UnknownServer",
+   "behavior": "OK",
+   "behaviorClose": "OK",
+   "case": 56,
+   "closedByMe": false,
+   "createStats": true,
+   "createWirelog": true,
+   "description": "Send unfragmented Text Message after Continuation Frame with FIN = false, where there is nothing to continue, sent in one chop.",
+   "droppedByMe": false,
+   "duration": 3,
+   "expectation": "The connection is failed immediately, since there is no message to continue.",
+   "expected": {
+      "OK": []
+   },
+   "expectedClose": {
+      "closeCode": [
+         1002
+      ],
+      "closedByMe": false,
+      "requireClean": false
+   },
+   "failedByMe": false,
+   "httpRequest": "GET / HTTP/1.1\r\nUser-Agent: AutobahnTestSuite/0.8.2-0.10.9\r\nHost: host.docker.internal:8080\r\nUpgrade: WebSocket\r\nConnection: Upgrade\r\nPragma: no-cache\r\nCache-Control: no-cache\r\nSec-WebSocket-Key: BE7wMeQEp38zsTerk9vuIQ==\r\nSec-WebSocket-Version: 13\r\n\r\n",
+   "httpResponse": "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: AFEkBUWg7sMAzYyrrMpQdxc+2Xo=\r\n\r\n",
+   "id": "5.12",
+   "isServer": false,
+   "localCloseCode": null,
+   "localCloseReason": null,
+   "received": [],
+   "remoteCloseCode": null,
+   "remoteCloseReason": null,
+   "reportCompressionRatio": false,
+   "reportTime": false,
+   "result": "Actual events match at least one expected.",
+   "resultClose": "Connection was properly closed",
+   "rxFrameStats": {},
+   "rxOctetStats": {
+      "129": 1
+   },
+   "started": "2023-03-30T07:17:09.066Z",
+   "trafficStats": null,
+   "txFrameStats": {
+      "0": 1,
+      "1": 1
+   },
+   "txOctetStats": {
+      "19": 1,
+      "30": 1,
+      "251": 1
+   },
+   "wasClean": false,
+   "wasCloseHandshakeTimeout": false,
+   "wasNotCleanReason": "peer dropped the TCP connection without previous WebSocket closing handshake",
+   "wasOpenHandshakeTimeout": false,
+   "wasServerConnectionDropTimeout": false,
+   "wirelog": [
+      [
+         "TO",
+         [
+            251,
+            "474554202f20485454502f312e310d0a557365722d4167656e743a204175746f6261686e5465737453756974652f302e382e322d302e31302e390d0a486f7374 ..."
+         ],
+         false
+      ],
+      [
+         "RO",
+         [
+            129,
+            "485454502f312e312031303120537769746368696e672050726f746f636f6c730d0a557067726164653a20776562736f636b65740d0a436f6e6e656374696f6e ..."
+         ]
+      ],
+      [
+         "TF",
+         [
+            24,
+            "non-continuation payload"
+         ],
+         0,
+         false,
+         0,
+         "b6f60483",
+         null,
+         null,
+         false
+      ],
+      [
+         "TO",
+         [
+            30,
+            "0098b6f60483d8996aaed5996af7df9871e2c29f6bed968665fada9965e7"
+         ],
+         false
+      ],
+      [
+         "TF",
+         [
+            13,
+            "Hello, world!"
+         ],
+         1,
+         true,
+         0,
+         "c71d8f95",
+         null,
+         null,
+         false
+      ],
+      [
+         "TO",
+         [
+            19,
+            "818dc71d8f958f78e3f9a831afe2a86fe3f1e6"
+         ],
+         false
+      ],
+      [
+         "KL",
+         1
+      ]
+   ]
+}
