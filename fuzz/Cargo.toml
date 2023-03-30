@@ -29,6 +29,12 @@ test = false
 doc = false
 
 [[bin]]
+name = "parse_frame_fragment"
+path = "fuzz_targets/parse_frame_fragment.rs"
+test = false
+doc = false
+
+[[bin]]
 name = "unmask"
 path = "fuzz_targets/unmask.rs"
 test = false
