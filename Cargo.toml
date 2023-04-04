@@ -1,5 +1,6 @@
 [package]
 name = "fastwebsockets"
+description = "A fast RFC6455 WebSocket server implementation"
 version = "0.1.0"
 authors = ["Divy Srivastava <dj.srivastava23@gmail.com>"]
 license = "Apache-2.0"
