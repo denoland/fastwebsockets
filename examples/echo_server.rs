@@ -15,10 +15,10 @@
 use base64;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
-use sha1::Digest;
-use sha1::Sha1;
 use fastwebsockets::OpCode;
 use fastwebsockets::WebSocket;
+use sha1::Digest;
+use sha1::Sha1;
 use tokio::io::AsyncBufReadExt;
 use tokio::io::AsyncWriteExt;
 use tokio::io::BufReader;
