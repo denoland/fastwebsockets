@@ -1,5 +1,5 @@
 [package]
-name = "sockdeez-fuzz"
+name = "fastwebsockets-fuzz"
 version = "0.0.0"
 publish = false
 edition = "2021"
@@ -12,7 +12,7 @@ libfuzzer-sys = "0.4"
 tokio = { version = "1.0", features = ["full"] }
 futures = "0.3.27"
 
-[dependencies.sockdeez]
+[dependencies.fastwebsockets]
 path = ".."
 
 # Prevent this from interfering with workspaces

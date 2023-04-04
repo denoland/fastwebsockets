@@ -73,7 +73,7 @@ fuzz_target!(|data: &[u8]| {
   let (tx, rx) = oneshot::channel();
   let stream = ArbitraryByteStream::new(data.to_vec(), tx);
 
-  let mut ws = sockdeez::WebSocket::after_handshake(stream);
+  let mut ws = fastwebsockets::WebSocket::after_handshake(stream);
   ws.set_writev(false);
   ws.set_auto_close(true);
   ws.set_auto_pong(true);

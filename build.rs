@@ -17,7 +17,7 @@ fn main() {
   println!("cargo:rerun-if-changed=src/m_arm64_neon.S");
   cc::Build::new()
     .file("src/m_arm64_neon.S")
-    .compile("libsockdeez_neon.a");
+    .compile("libfastwebsockets_neon.a");
 }
 
 #[cfg(not(target_arch = "aarch64"))]

@@ -17,8 +17,8 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use sha1::Digest;
 use sha1::Sha1;
-use sockdeez::OpCode;
-use sockdeez::WebSocket;
+use fastwebsockets::OpCode;
+use fastwebsockets::WebSocket;
 use tokio::io::AsyncBufReadExt;
 use tokio::io::AsyncWriteExt;
 use tokio::io::BufReader;
@@ -35,7 +35,7 @@ async fn handle_client(
   ws.set_auto_close(true);
   ws.set_auto_pong(true);
 
-  let mut ws = sockdeez::FragmentCollector::new(ws);
+  let mut ws = fastwebsockets::FragmentCollector::new(ws);
 
   loop {
     let frame = ws.read_frame().await?;

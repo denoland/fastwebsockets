@@ -2,7 +2,7 @@
     "outdir": "./reports/servers",
     "servers": [
         {
-            "agent": "sockdeez",
+            "agent": "fastwebsockets",
             "url": "ws://host.docker.internal:8080"
         }
     ],

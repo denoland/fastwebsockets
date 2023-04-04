@@ -8,7 +8,7 @@ fn benchmark(c: &mut Criterion) {
   group.throughput(Throughput::Bytes(STREAM_SIZE as u64));
   group.bench_function("unmask 64 << 20", |b| {
     b.iter(|| {
-      sockdeez::unmask(black_box(&mut data), [1, 2, 3, 4]);
+      fastwebsockets::unmask(black_box(&mut data), [1, 2, 3, 4]);
     });
   });
   group.finish();

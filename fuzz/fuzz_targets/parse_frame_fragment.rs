@@ -75,13 +75,13 @@ fuzz_target!(|data: &[u8]| {
   let (tx, rx) = oneshot::channel();
   let stream = ArbitraryByteStream::new(data.to_vec(), tx);
 
-  let mut ws = sockdeez::WebSocket::after_handshake(stream);
+  let mut ws = fastwebsockets::WebSocket::after_handshake(stream);
   ws.set_writev(false);
   ws.set_auto_close(true);
   ws.set_auto_pong(true);
   ws.set_max_message_size(u16::MAX as usize);
 
-  let mut ws = sockdeez::FragmentCollector::new(ws);
+  let mut ws = fastwebsockets::FragmentCollector::new(ws);
 
   futures::executor::block_on(async move {
     tokio::select! {
