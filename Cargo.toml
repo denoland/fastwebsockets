@@ -10,7 +10,7 @@ name = "echo_server"
 path = "examples/echo_server.rs"
 
 [dependencies]
-tokio = { version = "1.26.0",  default-features = false, features = ["io-util"] }
+tokio = { version = "1.25.0",  default-features = false, features = ["io-util"] }
 simdutf8 = { version = "0.1.4", optional = true }
 utf-8 = "0.7.5"
 

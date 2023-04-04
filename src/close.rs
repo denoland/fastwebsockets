@@ -124,3 +124,28 @@ impl From<u16> for CloseCode {
     }
   }
 }
+
+impl From<CloseCode> for u16 {
+  fn from(code: CloseCode) -> u16 {
+    match code {
+      Normal => 1000,
+      Away => 1001,
+      Protocol => 1002,
+      Unsupported => 1003,
+      Status => 1005,
+      Abnormal => 1006,
+      Invalid => 1007,
+      Policy => 1008,
+      Size => 1009,
+      Extension => 1010,
+      Error => 1011,
+      Restart => 1012,
+      Again => 1013,
+      Tls => 1015,
+      Reserved(code) => code,
+      Iana(code) => code,
+      Library(code) => code,
+      Bad(code) => code,
+    }
+  }
+}

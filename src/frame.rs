@@ -94,7 +94,19 @@ impl Frame {
     }
   }
 
-  pub fn close(payload: Vec<u8>) -> Self {
+  pub fn close(code: u16, reason: &[u8]) -> Self {
+    let mut payload = Vec::with_capacity(2 + reason.len());
+    payload.extend_from_slice(&code.to_be_bytes());
+    payload.extend_from_slice(reason);
+    Self {
+      fin: true,
+      opcode: OpCode::Close,
+      mask: None,
+      payload,
+    }
+  }
+
+  pub fn close_raw(payload: Vec<u8>) -> Self {
     Self {
       fin: true,
       opcode: OpCode::Close,

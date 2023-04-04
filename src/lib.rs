@@ -20,6 +20,7 @@ mod mask;
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
 
+pub use crate::close::CloseCode;
 pub use crate::fragment::FragmentCollector;
 pub use crate::frame::Frame;
 pub use crate::frame::OpCode;
@@ -111,10 +112,9 @@ impl<S> WebSocket<S> {
               std::str::from_utf8(&frame.payload[2..])?;
 
               if !code.is_allowed() {
-                let mut payload = u16::to_be_bytes(1002).to_vec();
-
-                payload.extend_from_slice(&frame.payload[2..]);
-                self.write_frame(Frame::close(payload)).await?;
+                self
+                  .write_frame(Frame::close(1002, &frame.payload[2..]))
+                  .await?;
 
                 return Err("invalid close code".into());
               }
@@ -122,7 +122,7 @@ impl<S> WebSocket<S> {
           };
 
           self
-            .write_frame(Frame::close(frame.payload.clone()))
+            .write_frame(Frame::close_raw(frame.payload.clone()))
             .await?;
           break Ok(frame);
         }
