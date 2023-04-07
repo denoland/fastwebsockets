@@ -43,6 +43,7 @@ async fn handle_client(
       OpCode::Close => break,
       OpCode::Text | OpCode::Binary => {
         ws.write_frame(frame).await?;
+        // ws.try_write(frame, |stream, frame| stream.try_write(frame))
       }
       _ => {}
     }

@@ -29,11 +29,31 @@ pub use crate::mask::unmask;
 pub struct WebSocket<S> {
   stream: S,
   write_buffer: Vec<u8>,
+  partial_write: Option<Vec<u8>>,
   read_buffer: Option<Vec<u8>>,
   vectored: bool,
   auto_close: bool,
   auto_pong: bool,
   max_message_size: usize,
+}
+
+impl<S> WebSocket<S> {
+  pub fn try_write(
+    &mut self,
+    mut frame: Frame,
+    cb: impl FnOnce(&mut S, &[u8]) -> std::io::Result<usize>,
+  ) -> bool {
+    assert!(self.partial_write.is_none()); // There should be no partial write in progress
+
+    let text = frame.write(&mut self.write_buffer);
+    let written = cb(&mut self.stream, text).unwrap_or(0);
+    // Not the most optimal approach, but this is the slow path anyway.
+    if written < text.len() {
+      self.partial_write = Some(text[written..].to_vec());
+    }
+
+    self.partial_write.is_none()
+  }
 }
 
 impl<S> WebSocket<S> {
@@ -48,6 +68,7 @@ impl<S> WebSocket<S> {
       vectored: false,
       auto_close: true,
       auto_pong: true,
+      partial_write: None,
       max_message_size: 64 << 20,
     }
   }
@@ -75,6 +96,11 @@ impl<S> WebSocket<S> {
   where
     S: AsyncReadExt + AsyncWriteExt + Unpin,
   {
+    if let Some(partial) = self.partial_write.take() {
+      self.stream.write_all(&partial).await?;
+      return Ok(());
+    }
+
     if self.vectored {
       frame.writev(&mut self.stream).await?;
     } else {

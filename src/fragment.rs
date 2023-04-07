@@ -156,6 +156,7 @@ impl<S> FragmentCollector<S> {
     }
   }
 
+  #[inline]
   pub async fn write_frame(
     &mut self,
     frame: Frame,
@@ -165,5 +166,14 @@ impl<S> FragmentCollector<S> {
   {
     self.ws.write_frame(frame).await?;
     Ok(())
+  }
+
+  #[inline]
+  pub fn try_write(
+    &mut self,
+    frame: Frame,
+    cb: impl FnOnce(&mut S, &[u8]) -> std::io::Result<usize>,
+  ) -> bool {
+    self.ws.try_write(frame, cb)
   }
 }

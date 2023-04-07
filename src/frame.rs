@@ -156,7 +156,6 @@ impl Frame {
     }
   }
 
-  // TODO
   pub async fn writev<S>(
     &mut self,
     stream: &mut S,
@@ -180,6 +179,7 @@ impl Frame {
 
         Ok(())
       }
+      // TODO
       _ => todo!(),
     }
   }
