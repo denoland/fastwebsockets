@@ -52,16 +52,22 @@ macro_rules! repr_u8 {
     }
 }
 
+/// Represents a WebSocket frame.
 pub struct Frame {
+  /// Indicates if this is the final frame in a message.
   pub fin: bool,
+  /// The opcode of the frame.
   pub opcode: OpCode,
+  /// The masking key of the frame, if any.
   mask: Option<[u8; 4]>,
+  /// The payload of the frame.
   pub payload: Vec<u8>,
 }
 
 const MAX_HEAD_SIZE: usize = 10;
 
 impl Frame {
+  /// Creates a new WebSocket `Frame`.
   pub fn new(
     fin: bool,
     opcode: OpCode,
@@ -76,6 +82,11 @@ impl Frame {
     }
   }
 
+  /// Create a new WebSocket text `Frame`.
+  ///
+  /// This is a convenience method for `Frame::new(true, OpCode::Text, None, payload)`.
+  ///
+  /// This method does not check if the payload is valid UTF-8.
   pub fn text(payload: Vec<u8>) -> Self {
     Self {
       fin: true,
@@ -85,6 +96,9 @@ impl Frame {
     }
   }
 
+  /// Create a new WebSocket binary `Frame`.
+  ///
+  /// This is a convenience method for `Frame::new(true, OpCode::Binary, None, payload)`.
   pub fn binary(payload: Vec<u8>) -> Self {
     Self {
       fin: true,
@@ -94,6 +108,11 @@ impl Frame {
     }
   }
 
+  /// Create a new WebSocket close `Frame`.
+  ///
+  /// This is a convenience method for `Frame::new(true, OpCode::Close, None, payload)`.
+  ///
+  /// This method does not check if `code` is a valid close code and `reason` is valid UTF-8.
   pub fn close(code: u16, reason: &[u8]) -> Self {
     let mut payload = Vec::with_capacity(2 + reason.len());
     payload.extend_from_slice(&code.to_be_bytes());
@@ -106,6 +125,11 @@ impl Frame {
     }
   }
 
+  /// Create a new WebSocket close `Frame` with a raw payload.
+  ///
+  /// This is a convenience method for `Frame::new(true, OpCode::Close, None, payload)`.
+  ///
+  /// This method does not check if `payload` is valid Close frame payload.
   pub fn close_raw(payload: Vec<u8>) -> Self {
     Self {
       fin: true,
@@ -115,6 +139,9 @@ impl Frame {
     }
   }
 
+  /// Create a new WebSocket pong `Frame`.
+  ///
+  /// This is a convenience method for `Frame::new(true, OpCode::Pong, None, payload)`.
   pub fn pong(payload: Vec<u8>) -> Self {
     Self {
       fin: true,
@@ -124,6 +151,7 @@ impl Frame {
     }
   }
 
+  /// Checks if the frame payload is valid UTF-8.
   pub fn is_utf8(&self) -> bool {
     #[cfg(feature = "simd")]
     return simdutf8::basic::from_utf8(&self.payload).is_ok();
@@ -132,12 +160,20 @@ impl Frame {
     return std::str::from_utf8(&self.payload).is_ok();
   }
 
+  /// Unmasks the frame payload in-place. This method does nothing if the frame is not masked.
+  ///
+  /// Note: By default, the frame payload is unmasked by `WebSocket::read_frame`.
   pub fn unmask(&mut self) {
     if let Some(mask) = self.mask {
       crate::mask::unmask(&mut self.payload, mask);
     }
   }
 
+  /// Formats the frame header into the head buffer. Returns the size of the length field.
+  ///
+  /// # Panics
+  ///
+  /// This method panics if the head buffer is not at least n-bytes long, where n is the size of the length field (0, 2, 4, or 10)
   pub fn fmt_head(&mut self, head: &mut [u8]) -> usize {
     head[0] = (self.fin as u8) << 7 | (self.opcode as u8);
 
@@ -184,6 +220,7 @@ impl Frame {
     }
   }
 
+  /// Writes the frame to the buffer and returns a slice of the buffer containing the frame.
   pub fn write<'a>(&mut self, buf: &'a mut Vec<u8>) -> &'a [u8] {
     fn reserve_enough(buf: &mut Vec<u8>, len: usize) {
       if buf.len() < len {

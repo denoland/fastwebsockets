@@ -19,6 +19,7 @@ fn unmask_easy(payload: &mut [u8], mask: [u8; 4]) {
   }
 }
 
+/// Unmask a payload using the given 4-byte mask.
 #[inline]
 pub fn unmask(payload: &mut [u8], mask: [u8; 4]) {
   #[cfg(not(target_arch = "aarch64"))]

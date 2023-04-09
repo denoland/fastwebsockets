@@ -1,3 +1,8 @@
+[![MIT licensed](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
+[![Crates.io](https://img.shields.io/crates/v/fastwebsockets.svg)](https://crates.io/crates/fastwebsockets)
+
+[Documentation](https://docs.rs/fastwebsockets)
+
 _fastwebsockets_ is a fast WebSocket server implementation.
 
 Passes the
@@ -38,9 +43,9 @@ async fn handle_client(
 
 **Fragmentation**
 
-By default, fastwebsockets will give the application raw frames with FIN set. Other
-crates like tungstenite which will give you a single message with all the frames
-concatenated.
+By default, fastwebsockets will give the application raw frames with FIN set.
+Other crates like tungstenite which will give you a single message with all the
+frames concatenated.
 
 For concanated frames, use `FragmentCollector`:
 

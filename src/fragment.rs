@@ -24,6 +24,7 @@ pub enum Fragment {
 }
 
 impl Fragment {
+  /// Returns the payload of the fragment.
   fn take_buffer(self) -> Vec<u8> {
     match self {
       Fragment::Text(_, buffer) => buffer,
@@ -32,6 +33,39 @@ impl Fragment {
   }
 }
 
+/// Collects fragmented messages over a WebSocket connection and returns the completed message once all fragments have been received.
+///
+/// This is useful for applications that do not want to deal with fragmented messages and the default behavior of tungstenite.
+/// The payload is buffered in memory until the final fragment is received
+/// so use this when streaming messages is not an option.
+///
+/// # Example
+///
+/// ```no_run
+/// use tokio::net::TcpStream;
+/// use fastwebsockets::{WebSocket, FragmentCollector, OpCode};
+///
+/// async fn handle_client(
+///   socket: TcpStream,
+/// ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+///   let socket = handshake(socket).await?;
+///
+///   let ws = WebSocket::after_handshake(socket);
+///   let mut ws = FragmentCollector::new(ws);
+///
+///   loop {
+///     match frame.opcode {
+///       OpCode::Close => break,
+///       OpCode::Text | OpCode::Binary => {
+///         ws.write_frame(frame).await?;
+///       }
+///       _ => {}
+///     }
+///   }
+///   Ok(())
+/// }
+/// ```
+///
 pub struct FragmentCollector<S> {
   ws: WebSocket<S>,
   fragments: Option<Fragment>,
@@ -39,6 +73,7 @@ pub struct FragmentCollector<S> {
 }
 
 impl<S> FragmentCollector<S> {
+  /// Creates a new `FragmentCollector` with the provided `WebSocket`.
   pub fn new(ws: WebSocket<S>) -> FragmentCollector<S>
   where
     S: AsyncReadExt + AsyncWriteExt + Unpin,
@@ -50,6 +85,7 @@ impl<S> FragmentCollector<S> {
     }
   }
 
+  /// Reads a WebSocket frame, collecting fragmented messages until the final frame is received and returns the completed message.
   pub async fn read_frame(
     &mut self,
   ) -> Result<Frame, Box<dyn std::error::Error + Send + Sync>>
@@ -156,6 +192,7 @@ impl<S> FragmentCollector<S> {
     }
   }
 
+  /// See `WebSocket::write_frame`.
   pub async fn write_frame(
     &mut self,
     frame: Frame,

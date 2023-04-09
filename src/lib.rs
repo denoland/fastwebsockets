@@ -12,6 +12,61 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! _fastwebsockets_ is a minimal, fast WebSocket server implementation.
+//!
+//! [https://github.com/littledivy/fastwebsockets](https://github.com/littledivy/fastwebsockets)
+//!
+//! Passes the _Autobahn|TestSuite_ and fuzzed with LLVM's _libfuzzer_.
+//!
+//! You can use it as a raw websocket frame parser and deal with spec compliance yourself, or you can use it as a full-fledged websocket server.
+//!
+//! # Example
+//!
+//! ```no_run
+//! use tokio::net::TcpStream;
+//! use fastwebsockets::{WebSocket, OpCode};
+//!
+//! async fn handle_client(
+//!   socket: TcpStream,
+//! ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+//!   // Perform the WebSocket handshake
+//!   let socket = handshake(socket).await?;
+//!
+//!   let mut ws = WebSocket::after_handshake(socket);
+//!   ws.set_writev(false);
+//!   ws.set_auto_close(true);
+//!   ws.set_auto_pong(true);
+//!
+//!   loop {
+//!     match frame.opcode {
+//!       OpCode::Close => break,
+//!       OpCode::Text | OpCode::Binary => {
+//!         ws.write_frame(frame).await?;
+//!       }
+//!       _ => {}
+//!     }
+//!   }
+//!   Ok(())
+//! }
+//! ```
+//!
+//! ## Fragmentation
+//!
+//! By default, fastwebsockets will give the application raw frames with FIN set. Other
+//! crates like tungstenite which will give you a single message with all the frames
+//! concatenated.
+//!
+//! For concanated frames, use `FragmentCollector`:
+//! ```rust
+//! let mut ws = WebSocket::after_handshake(socket);
+//! let mut ws = FragmentCollector::new(ws);
+//! let incoming = ws.read_frame().await?;
+//! // Always returns full messages
+//! assert!(incoming.fin);
+//! ```
+//!
+//! _permessage-deflate is not supported yet._
+//!
 mod close;
 mod fragment;
 mod frame;
@@ -26,6 +81,7 @@ pub use crate::frame::Frame;
 pub use crate::frame::OpCode;
 pub use crate::mask::unmask;
 
+/// WebSocket protocol implementation over an async stream.
 pub struct WebSocket<S> {
   stream: S,
   write_buffer: Vec<u8>,
@@ -37,6 +93,25 @@ pub struct WebSocket<S> {
 }
 
 impl<S> WebSocket<S> {
+  /// Creates a new `WebSocket` from a stream that has already completed the WebSocket handshake.
+  ///
+  /// Currently, this crate does not handle the WebSocket handshake, so you should need to do that yourself.
+  ///
+  /// # Example
+  ///
+  /// ```no_run
+  /// use tokio::net::TcpStream;
+  /// use fastwebsockets::{WebSocket, OpCode};
+  ///
+  /// async fn handle_client(
+  ///   socket: TcpStream,
+  /// ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+  ///   // Perform the WebSocket handshake
+  ///   let socket = handshake(socket).await?;
+  ///   let mut ws = WebSocket::after_handshake(socket);
+  ///   // ...
+  /// }
+  /// ```
   pub fn after_handshake(stream: S) -> Self
   where
     S: AsyncReadExt + AsyncWriteExt + Unpin,
@@ -52,22 +127,46 @@ impl<S> WebSocket<S> {
     }
   }
 
+  /// Sets whether to use vectored writes. This option does not guarantee that vectored writes will be always used.
+  ///
+  /// Default: `false`
   pub fn set_writev(&mut self, vectored: bool) {
     self.vectored = vectored;
   }
 
+  /// Sets whether to automatically close the connection when a close frame is received. When set to `false`, the application will have to manually send close frames.
+  ///
+  /// Default: `true`
   pub fn set_auto_close(&mut self, auto_close: bool) {
     self.auto_close = auto_close;
   }
 
+  /// Sets whether to automatically send a pong frame when a ping frame is received.
+  ///
+  /// Default: `true`
   pub fn set_auto_pong(&mut self, auto_pong: bool) {
     self.auto_pong = auto_pong;
   }
 
+  /// Sets the maximum message size in bytes. If a message is received that is larger than this, the connection will be closed.
+  ///
+  /// Default: 64 MiB
   pub fn set_max_message_size(&mut self, max_message_size: usize) {
     self.max_message_size = max_message_size;
   }
 
+  /// Writes a frame to the stream.
+  ///
+  /// This method will not mask the frame payload.
+  ///
+  /// # Example
+  ///
+  /// ```no_run
+  /// use fastwebsockets::Frame;
+  ///
+  /// let mut frame = Frame::text(vec![0x01, 0x02, 0x03]);
+  /// ws.write_frame(frame).await?;
+  /// ```
   pub async fn write_frame(
     &mut self,
     mut frame: Frame,
@@ -85,6 +184,23 @@ impl<S> WebSocket<S> {
     Ok(())
   }
 
+  /// Reads a frame from the stream.
+  ///
+  /// This method will unmask the frame payload. For fragmented frames, use `FragmentCollector::read_frame`.
+  ///
+  /// # Example
+  ///
+  /// ```no_run
+  /// use fastwebsockets::OpCode;
+  ///
+  /// let frame = ws.read_frame().await?;
+  /// match frame.opcode {
+  ///   OpCode::Text | OpCode::Binary => {
+  ///     ws.write_frame(frame).await?;
+  ///   }
+  ///   _ => {}
+  /// }
+  /// ```
   pub async fn read_frame(
     &mut self,
   ) -> Result<Frame, Box<dyn std::error::Error + Send + Sync>>
