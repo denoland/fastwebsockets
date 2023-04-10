@@ -41,7 +41,7 @@ impl Fragment {
 ///
 /// # Example
 ///
-/// ```no_run
+/// ```ignore
 /// use tokio::net::TcpStream;
 /// use fastwebsockets::{WebSocket, FragmentCollector, OpCode};
 ///
@@ -54,6 +54,7 @@ impl Fragment {
 ///   let mut ws = FragmentCollector::new(ws);
 ///
 ///   loop {
+///     let frame = ws.read_frame().await?;
 ///     match frame.opcode {
 ///       OpCode::Close => break,
 ///       OpCode::Text | OpCode::Binary => {

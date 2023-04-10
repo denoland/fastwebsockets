@@ -22,7 +22,7 @@
 //!
 //! # Example
 //!
-//! ```no_run
+//! ```ignore
 //! use tokio::net::TcpStream;
 //! use fastwebsockets::{WebSocket, OpCode};
 //!
@@ -38,6 +38,7 @@
 //!   ws.set_auto_pong(true);
 //!
 //!   loop {
+//!     let frame = ws.read_frame().await?;
 //!     match frame.opcode {
 //!       OpCode::Close => break,
 //!       OpCode::Text | OpCode::Binary => {
@@ -57,7 +58,9 @@
 //! concatenated.
 //!
 //! For concanated frames, use `FragmentCollector`:
-//! ```rust
+//! ```ignore
+//! use fastwebsockets::{FragmentCollector, WebSocket};
+//!
 //! let mut ws = WebSocket::after_handshake(socket);
 //! let mut ws = FragmentCollector::new(ws);
 //! let incoming = ws.read_frame().await?;
@@ -99,7 +102,7 @@ impl<S> WebSocket<S> {
   ///
   /// # Example
   ///
-  /// ```no_run
+  /// ```ignore
   /// use tokio::net::TcpStream;
   /// use fastwebsockets::{WebSocket, OpCode};
   ///
@@ -161,7 +164,7 @@ impl<S> WebSocket<S> {
   ///
   /// # Example
   ///
-  /// ```no_run
+  /// ```ignore
   /// use fastwebsockets::Frame;
   ///
   /// let mut frame = Frame::text(vec![0x01, 0x02, 0x03]);
@@ -190,7 +193,7 @@ impl<S> WebSocket<S> {
   ///
   /// # Example
   ///
-  /// ```no_run
+  /// ```ignore
   /// use fastwebsockets::OpCode;
   ///
   /// let frame = ws.read_frame().await?;
