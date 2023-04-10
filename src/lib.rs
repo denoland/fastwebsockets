@@ -191,6 +191,8 @@ impl<S> WebSocket<S> {
   ///
   /// This method will unmask the frame payload. For fragmented frames, use `FragmentCollector::read_frame`.
   ///
+  /// Text frames payload is guaranteed to be valid UTF-8.
+  ///
   /// # Example
   ///
   /// ```ignore
