@@ -14,9 +14,22 @@
     limitations under the License.
 */
 
-.globl	_unmask
+#ifdef __clang__
+# define TYPE(__proc)
+#else
+# define TYPE(__proc) .type __proc, @function
+#endif
+
+#ifdef __MACH__
+# define PROC_NAME(__proc) _ ## __proc
+#else
+# define PROC_NAME(__proc) __proc
+#endif
+
+.global	PROC_NAME(unmask)
+TYPE(unmask)
 .p2align	2
-_unmask:
+PROC_NAME(unmask):
 	.cfi_startproc
 
 	cbz	x2, end_unmask
