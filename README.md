@@ -1,4 +1,3 @@
-[![MIT licensed](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 [![Crates.io](https://img.shields.io/crates/v/fastwebsockets.svg)](https://crates.io/crates/fastwebsockets)
 
 [Documentation](https://docs.rs/fastwebsockets)
