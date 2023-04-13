@@ -56,8 +56,8 @@ unmask_32:
 
 unmask_32_loop:                                 
 	ldp	q2, q3, [x9, #-16]
-	eor.16b	v2, v2, v0
-	eor.16b	v3, v3, v1
+	eor	v2.16b, v2.16b, v0.16b
+	eor	v3.16b, v3.16b, v1.16b
 	stp	q2, q3, [x9, #-16]
 	add	x9, x9, #32                     
 	subs	x10, x10, #32                   
@@ -78,7 +78,7 @@ unmask_8:
 
 unmask_8_loop:                               
 	ldr	d1, [x9]
-	eor.8b	v1, v1, v0
+	eor	v1.8b, v1.8b, v0.8b
 	str	d1, [x9], #8
 	adds	x10, x10, #8                    
 	b.ne	unmask_8_loop
