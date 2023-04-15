@@ -219,7 +219,7 @@ impl Frame {
     }
 
     // Header out of the way.
-    if n > size {
+    if n < total && n > size {
       stream.write_all(&self.payload[n - size..]).await?;
     }
 
