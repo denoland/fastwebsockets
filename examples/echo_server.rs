@@ -31,7 +31,7 @@ async fn handle_client(
   let socket = handshake(socket).await?;
 
   let mut ws = WebSocket::after_handshake(socket);
-  ws.set_writev(false);
+  ws.set_writev(true);
   ws.set_auto_close(true);
   ws.set_auto_pong(true);
 
