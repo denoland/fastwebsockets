@@ -192,7 +192,6 @@ impl Frame {
     }
   }
 
-  // TODO
   pub async fn writev<S>(
     &mut self,
     stream: &mut S,
@@ -202,22 +201,29 @@ impl Frame {
   {
     use std::io::IoSlice;
 
-    match self.opcode {
-      OpCode::Text => {
-        let mut head = [0; MAX_HEAD_SIZE];
-        let size = self.fmt_head(&mut head);
+    let mut head = [0; MAX_HEAD_SIZE];
+    let size = self.fmt_head(&mut head);
 
-        stream
-          .write_vectored(&[
-            IoSlice::new(&head[..size]),
-            IoSlice::new(&self.payload),
-          ])
-          .await?;
+    let total = size + self.payload.len();
+    let mut b = [IoSlice::new(&head[..size]), IoSlice::new(&self.payload)];
 
-        Ok(())
-      }
-      _ => todo!(),
+    let mut n = stream.write_vectored(&b).await?;
+    if n == total {
+      return Ok(());
     }
+
+    // Slighly more optimized than (unstable) write_all_vectored for 2 iovecs.
+    while n < size {
+      b[0] = IoSlice::new(&head[n..size]);
+      n += stream.write_vectored(&b).await?;
+    }
+
+    // Header out of the way.
+    if n > size {
+      stream.write_all(&self.payload[n - size..]).await?;
+    }
+
+    Ok(())
   }
 
   /// Writes the frame to the buffer and returns a slice of the buffer containing the frame.
