@@ -25,11 +25,10 @@ simd = ["cc", "simdutf8/aarch64_neon"]
 [dev-dependencies]
 # examples
 tokio = { version = "1.25.0", features = ["full"] }
-deno_core = "0.175.0"
-deno_ops = "0.53.0"
-rand = "0.8.4"
 base64 = "0.21.0"
 sha1 = "0.10.5"
+hyper = { version = "0.14.26", features = ["http1", "server"] }
+
 # bench
 criterion = "0.4.0"
 
