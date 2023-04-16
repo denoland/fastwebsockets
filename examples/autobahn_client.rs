@@ -15,14 +15,11 @@
 use fastwebsockets::FragmentCollector;
 use fastwebsockets::Frame;
 use fastwebsockets::OpCode;
+use fastwebsockets::Role;
 use fastwebsockets::WebSocket;
-use futures::TryStreamExt;
 use hyper::header::CONNECTION;
 use hyper::upgrade::Upgraded;
 use hyper::Body;
-use std::io::Write;
-use tokio::io::AsyncReadExt;
-use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 
 use hyper::header::UPGRADE;
@@ -32,74 +29,67 @@ use hyper::StatusCode;
 type Result<T> =
   std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
-async fn connect(path: &str) -> Result<FragmentCollector<TcpStream>> {
-  let mut stream = TcpStream::connect("localhost:9001").await?;
+async fn connect(path: &str) -> Result<FragmentCollector<Upgraded>> {
+  let stream = TcpStream::connect("localhost:9001").await?;
 
-  let mut req = Vec::new();
-  write!(req, "GET /{} HTTP/1.1\r\n", path).unwrap();
-  write!(req, "Host: localhost:9001\r\n").unwrap();
-  write!(req, "User-Agent: fastwebsockets\r\n").unwrap();
-  write!(req, "Upgrade: websocket\r\n").unwrap();
-  write!(req, "Connection: upgrade\r\n").unwrap();
-  write!(req, "Sec-WebSocket-Key: gn/tcQDBSTmTj39Xf8bBNg==\r\n").unwrap();
-  write!(req, "Sec-WebSocket-Version: 13\r\n").unwrap();
-  write!(req, "\r\n").unwrap();
+  let req = Request::builder()
+    .method("GET")
+    .uri(format!("http://localhost:9001/{}", path))
+    .header("Host", "localhost:9001")
+    .header(UPGRADE, "websocket")
+    .header(CONNECTION, "upgrade")
+    .header("Sec-WebSocket-Key", "gn/tcQDBSTmTj39Xf8bBNg==")
+    .header("Sec-WebSocket-Version", "13")
+    .body(Body::empty())?;
 
-  stream.write_all(&req).await?;
+  let (mut sender, conn) = hyper::client::conn::handshake(stream).await?;
 
-  // Parse response
-  // Peek and read. Don't read the websocket data
-  let mut buf = [0; 1024];
-  let n = stream.peek(&mut buf).await?;
-  // Find the end of the headers and split the buffer
-  let pos = buf[..n]
-    .windows(4)
-    .position(|window| window == b"\r\n\r\n")
-    .expect("No end of headers");
+  tokio::spawn(async move {
+    if let Err(e) = conn.await {
+      eprintln!("Error polling connection: {}", e);
+    }
+  });
 
-  stream.read_exact(&mut buf[..pos + 4]).await?;
+  let res = sender.send_request(req).await?;
+  assert_eq!(res.status(), StatusCode::SWITCHING_PROTOCOLS);
 
-  Ok(FragmentCollector::new(WebSocket::after_handshake(stream)))
+  match hyper::upgrade::on(res).await {
+    Ok(upgraded) => Ok(FragmentCollector::new(WebSocket::after_handshake(
+      upgraded,
+      Role::Client,
+    ))),
+    Err(e) => Err(e.into()),
+  }
 }
 
 async fn get_case_count() -> Result<u32> {
   let mut ws = connect("getCaseCount").await?;
   let msg = ws.read_frame().await?;
-  ws.write_frame(Frame::close(1000, &[], true)).await?;
+  ws.write_frame(Frame::close(1000, &[])).await?;
   Ok(std::str::from_utf8(&msg.payload)?.parse()?)
-}
-
-fn mask(payload: &[u8]) -> (Vec<u8>, [u8; 4]) {
-  let mut mask = [1, 2, 3, 4];
-  let mut masked = Vec::new();
-  for (i, byte) in payload.iter().enumerate() {
-    masked.push(byte ^ mask[i % 4]);
-  }
-  (masked, mask)
 }
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
   let count = get_case_count().await?;
-  dbg!(count);
+
   for case in 1..=count {
     let mut ws =
       connect(&format!("runCase?case={}&agent=fastwebsockets", case)).await?;
-    dbg!(case);
+
     loop {
       let msg = match ws.read_frame().await {
         Ok(msg) => msg,
         Err(e) => {
           println!("Error: {}", e);
-          ws.write_frame(Frame::close_raw(vec![], true)).await?;
+          ws.write_frame(Frame::close_raw(vec![])).await?;
           break;
         }
       };
 
       match msg.opcode {
         OpCode::Text | OpCode::Binary => {
-          let (masked, mask) = mask(&msg.payload);
-          ws.write_frame(Frame::new(true, msg.opcode, Some(mask), masked))
+          ws.write_frame(Frame::new(true, msg.opcode, None, msg.payload))
             .await?;
         }
         OpCode::Close => {
@@ -111,7 +101,7 @@ async fn main() -> Result<()> {
   }
 
   let mut ws = connect("updateReports?agent=fastwebsockets").await?;
-  ws.write_frame(Frame::close(1000, &[], true)).await?;
+  ws.write_frame(Frame::close(1000, &[])).await?;
 
   Ok(())
 }

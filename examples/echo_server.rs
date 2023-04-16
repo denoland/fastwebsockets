@@ -16,6 +16,7 @@ use base64;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use fastwebsockets::OpCode;
+use fastwebsockets::Role;
 use fastwebsockets::WebSocket;
 use sha1::Digest;
 use sha1::Sha1;
@@ -34,7 +35,7 @@ use hyper::StatusCode;
 async fn handle_client(
   socket: Upgraded,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-  let mut ws = WebSocket::after_handshake(socket);
+  let mut ws = WebSocket::after_handshake(socket, Role::Server);
   ws.set_writev(true);
   ws.set_auto_close(true);
   ws.set_auto_pong(true);

@@ -52,15 +52,6 @@ macro_rules! repr_u8 {
     }
 }
 
-fn mask(payload: &[u8]) -> (Vec<u8>, [u8; 4]) {
-  let mask = [1, 2, 3, 4];
-  let mut masked = Vec::new();
-  for (i, byte) in payload.iter().enumerate() {
-    masked.push(byte ^ mask[i % 4]);
-  }
-  (masked, mask)
-}
-
 /// Represents a WebSocket frame.
 pub struct Frame {
   /// Indicates if this is the final frame in a message.
@@ -122,19 +113,11 @@ impl Frame {
   /// This is a convenience method for `Frame::new(true, OpCode::Close, None, payload)`.
   ///
   /// This method does not check if `code` is a valid close code and `reason` is valid UTF-8.
-  pub fn close(code: u16, reason: &[u8], m: bool) -> Self {
+  pub fn close(code: u16, reason: &[u8]) -> Self {
     let mut payload = Vec::with_capacity(2 + reason.len());
     payload.extend_from_slice(&code.to_be_bytes());
     payload.extend_from_slice(reason);
-    if m {
-      let (masked, mask) = mask(&payload);
-      return Self {
-        fin: true,
-        opcode: OpCode::Close,
-        mask: Some(mask),
-        payload: masked,
-      };
-    }
+
     Self {
       fin: true,
       opcode: OpCode::Close,
@@ -148,17 +131,7 @@ impl Frame {
   /// This is a convenience method for `Frame::new(true, OpCode::Close, None, payload)`.
   ///
   /// This method does not check if `payload` is valid Close frame payload.
-  pub fn close_raw(payload: Vec<u8>, m: bool) -> Self {
-    if m {
-      let (masked, mask) = mask(&payload);
-      return Self {
-        fin: true,
-        opcode: OpCode::Close,
-        mask: Some(mask),
-        payload: masked,
-      };
-    }
-
+  pub fn close_raw(payload: Vec<u8>) -> Self {
     Self {
       fin: true,
       opcode: OpCode::Close,
@@ -170,17 +143,7 @@ impl Frame {
   /// Create a new WebSocket pong `Frame`.
   ///
   /// This is a convenience method for `Frame::new(true, OpCode::Pong, None, payload)`.
-  pub fn pong(payload: Vec<u8>, m: bool) -> Self {
-    if m {
-      let (masked, mask) = mask(&payload);
-      return Self {
-        fin: true,
-        opcode: OpCode::Pong,
-        mask: Some(mask),
-        payload: masked,
-      };
-    }
-
+  pub fn pong(payload: Vec<u8>) -> Self {
     Self {
       fin: true,
       opcode: OpCode::Pong,
@@ -196,6 +159,16 @@ impl Frame {
 
     #[cfg(not(feature = "simd"))]
     return std::str::from_utf8(&self.payload).is_ok();
+  }
+
+  pub fn mask(&mut self) {
+    if let Some(mask) = self.mask {
+      crate::mask::unmask(&mut self.payload, mask);
+    } else {
+      let mask: [u8; 4] = rand::random();
+      crate::mask::unmask(&mut self.payload, mask);
+      self.mask = Some(mask);
+    }
   }
 
   /// Unmasks the frame payload in-place. This method does nothing if the frame is not masked.

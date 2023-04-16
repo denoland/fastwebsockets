@@ -84,6 +84,12 @@ pub use crate::frame::Frame;
 pub use crate::frame::OpCode;
 pub use crate::mask::unmask;
 
+#[derive(PartialEq)]
+pub enum Role {
+  Server,
+  Client,
+}
+
 /// WebSocket protocol implementation over an async stream.
 pub struct WebSocket<S> {
   stream: S,
@@ -93,6 +99,8 @@ pub struct WebSocket<S> {
   auto_close: bool,
   auto_pong: bool,
   max_message_size: usize,
+  auto_apply_mask: bool,
+  role: Role,
 }
 
 impl<S> WebSocket<S> {
@@ -115,7 +123,7 @@ impl<S> WebSocket<S> {
   ///   // ...
   /// }
   /// ```
-  pub fn after_handshake(stream: S) -> Self
+  pub fn after_handshake(stream: S, role: Role) -> Self
   where
     S: AsyncReadExt + AsyncWriteExt + Unpin,
   {
@@ -126,13 +134,15 @@ impl<S> WebSocket<S> {
       vectored: true,
       auto_close: true,
       auto_pong: true,
+      auto_apply_mask: true,
       max_message_size: 64 << 20,
+      role,
     }
   }
 
   /// Sets whether to use vectored writes. This option does not guarantee that vectored writes will be always used.
   ///
-  /// Default: `false`
+  /// Default: `true`
   pub fn set_writev(&mut self, vectored: bool) {
     self.vectored = vectored;
   }
@@ -158,6 +168,13 @@ impl<S> WebSocket<S> {
     self.max_message_size = max_message_size;
   }
 
+  /// Sets whether to automatically apply the mask to the frame payload.
+  ///
+  /// Default: `true`
+  pub fn set_auto_apply_mask(&mut self, auto_apply_mask: bool) {
+    self.auto_apply_mask = auto_apply_mask;
+  }
+
   /// Writes a frame to the stream.
   ///
   /// This method will not mask the frame payload.
@@ -177,6 +194,10 @@ impl<S> WebSocket<S> {
   where
     S: AsyncReadExt + AsyncWriteExt + Unpin,
   {
+    if self.role == Role::Client && self.auto_apply_mask {
+      frame.mask();
+    }
+
     if self.vectored {
       frame.writev(&mut self.stream).await?;
     } else {
@@ -214,7 +235,9 @@ impl<S> WebSocket<S> {
   {
     loop {
       let mut frame = self.parse_frame_header().await?;
-      // frame.unmask();
+      if self.role == Role::Server && self.auto_apply_mask {
+        frame.unmask()
+      };
 
       match frame.opcode {
         OpCode::Close if self.auto_close => {
@@ -234,7 +257,7 @@ impl<S> WebSocket<S> {
 
               if !code.is_allowed() {
                 self
-                  .write_frame(Frame::close(1002, &frame.payload[2..], true))
+                  .write_frame(Frame::close(1002, &frame.payload[2..]))
                   .await?;
 
                 return Err("invalid close code".into());
@@ -243,12 +266,12 @@ impl<S> WebSocket<S> {
           };
 
           self
-            .write_frame(Frame::close_raw(frame.payload.clone(), true))
+            .write_frame(Frame::close_raw(frame.payload.clone()))
             .await?;
           break Ok(frame);
         }
         OpCode::Ping if self.auto_pong => {
-          self.write_frame(Frame::pong(frame.payload, true)).await?;
+          self.write_frame(Frame::pong(frame.payload)).await?;
         }
         OpCode::Text => {
           if frame.fin && !frame.is_utf8() {
