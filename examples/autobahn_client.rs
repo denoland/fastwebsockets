@@ -15,16 +15,12 @@
 use fastwebsockets::FragmentCollector;
 use fastwebsockets::Frame;
 use fastwebsockets::OpCode;
-use fastwebsockets::Role;
-use fastwebsockets::WebSocket;
 use hyper::header::CONNECTION;
+use hyper::header::UPGRADE;
 use hyper::upgrade::Upgraded;
 use hyper::Body;
-use tokio::net::TcpStream;
-
-use hyper::header::UPGRADE;
 use hyper::Request;
-use hyper::StatusCode;
+use tokio::net::TcpStream;
 
 type Result<T> =
   std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
@@ -42,24 +38,9 @@ async fn connect(path: &str) -> Result<FragmentCollector<Upgraded>> {
     .header("Sec-WebSocket-Version", "13")
     .body(Body::empty())?;
 
-  let (mut sender, conn) = hyper::client::conn::handshake(stream).await?;
-
-  tokio::spawn(async move {
-    if let Err(e) = conn.await {
-      eprintln!("Error polling connection: {}", e);
-    }
-  });
-
-  let res = sender.send_request(req).await?;
-  assert_eq!(res.status(), StatusCode::SWITCHING_PROTOCOLS);
-
-  match hyper::upgrade::on(res).await {
-    Ok(upgraded) => Ok(FragmentCollector::new(WebSocket::after_handshake(
-      upgraded,
-      Role::Client,
-    ))),
-    Err(e) => Err(e.into()),
-  }
+  Ok(FragmentCollector::new(
+    fastwebsockets::handshake::client(req, stream).await?,
+  ))
 }
 
 async fn get_case_count() -> Result<u32> {

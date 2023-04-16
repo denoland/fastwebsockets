@@ -73,6 +73,8 @@
 mod close;
 mod fragment;
 mod frame;
+#[cfg(feature = "upgrade")]
+pub mod handshake;
 mod mask;
 #[cfg(feature = "upgrade")]
 pub mod upgrade;
