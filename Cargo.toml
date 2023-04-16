@@ -27,8 +27,9 @@ simd = ["cc", "simdutf8/aarch64_neon"]
 tokio = { version = "1.25.0", features = ["full"] }
 rand = "0.8.4"
 base64 = "0.21.0"
+futures = "*"
 sha1 = "0.10.5"
-hyper = { version = "0.14.26", features = ["http1", "server"] }
+hyper = { version = "0.14.26", features = ["http1", "server", "client"] }
 
 # bench
 criterion = "0.4.0"

@@ -64,7 +64,7 @@ pub struct Frame {
   pub payload: Vec<u8>,
 }
 
-const MAX_HEAD_SIZE: usize = 10;
+const MAX_HEAD_SIZE: usize = 16;
 
 impl Frame {
   /// Creates a new WebSocket `Frame`.
@@ -176,19 +176,29 @@ impl Frame {
   /// This method panics if the head buffer is not at least n-bytes long, where n is the size of the length field (0, 2, 4, or 10)
   pub fn fmt_head(&mut self, head: &mut [u8]) -> usize {
     head[0] = (self.fin as u8) << 7 | (self.opcode as u8);
+    
+    let offset = if self.mask.is_some() { 4 } else { 0 };
+    let mut start = 2;
+    if let Some(mask) = self.mask {
+      head[1] = 0x80;
+      head[start..6].copy_from_slice(&mask);
+      start = 6;
+    } else {
+      head[1] = 0;
+    }
 
     let len = self.payload.len();
     if len < 126 {
-      head[1] = len as u8;
-      2
+      head[1] |= len as u8;
+      2 + offset
     } else if len < 65536 {
-      head[1] = 126;
-      head[2..4].copy_from_slice(&(len as u16).to_be_bytes());
-      4
+      head[1] |= 126;
+      head[start..start + 2].copy_from_slice(&(len as u16).to_be_bytes());
+      4 + offset
     } else {
-      head[1] = 127;
-      head[2..10].copy_from_slice(&(len as u64).to_be_bytes());
-      10
+      head[1] |= 127;
+      head[start..start + 8].copy_from_slice(&(len as u64).to_be_bytes());
+      10 + offset
     }
   }
 

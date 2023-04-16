@@ -123,7 +123,7 @@ impl<S> WebSocket<S> {
       stream,
       write_buffer: Vec::with_capacity(2),
       read_buffer: None,
-      vectored: false,
+      vectored: true,
       auto_close: true,
       auto_pong: true,
       max_message_size: 64 << 20,
@@ -214,7 +214,7 @@ impl<S> WebSocket<S> {
   {
     loop {
       let mut frame = self.parse_frame_header().await?;
-      frame.unmask();
+      // frame.unmask();
 
       match frame.opcode {
         OpCode::Close if self.auto_close => {
