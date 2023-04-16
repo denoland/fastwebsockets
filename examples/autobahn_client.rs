@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use fastwebsockets::FragmentCollector;
 use fastwebsockets::Frame;
 use fastwebsockets::OpCode;
 use fastwebsockets::WebSocket;
@@ -31,7 +32,7 @@ use hyper::StatusCode;
 type Result<T> =
   std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
-async fn connect(path: &str) -> Result<WebSocket<TcpStream>> {
+async fn connect(path: &str) -> Result<FragmentCollector<TcpStream>> {
   let mut stream = TcpStream::connect("localhost:9001").await?;
 
   let mut req = Vec::new();
@@ -58,18 +59,18 @@ async fn connect(path: &str) -> Result<WebSocket<TcpStream>> {
 
   stream.read_exact(&mut buf[..pos + 4]).await?;
 
-  Ok(WebSocket::after_handshake(stream))
+  Ok(FragmentCollector::new(WebSocket::after_handshake(stream)))
 }
 
 async fn get_case_count() -> Result<u32> {
   let mut ws = connect("getCaseCount").await?;
   let msg = ws.read_frame().await?;
-  ws.write_frame(Frame::close(1000, &[])).await?;
+  ws.write_frame(Frame::close(1000, &[], true)).await?;
   Ok(std::str::from_utf8(&msg.payload)?.parse()?)
 }
 
 fn mask(payload: &[u8]) -> (Vec<u8>, [u8; 4]) {
-  let mut mask = [1,2,3,4];
+  let mut mask = [1, 2, 3, 4];
   let mut masked = Vec::new();
   for (i, byte) in payload.iter().enumerate() {
     masked.push(byte ^ mask[i % 4]);
@@ -86,17 +87,20 @@ async fn main() -> Result<()> {
       connect(&format!("runCase?case={}&agent=fastwebsockets", case)).await?;
     dbg!(case);
     loop {
-      let msg = ws.read_frame().await?;
-      
+      let msg = match ws.read_frame().await {
+        Ok(msg) => msg,
+        Err(e) => {
+          println!("Error: {}", e);
+          ws.write_frame(Frame::close_raw(vec![], true)).await?;
+          break;
+        }
+      };
+
       match msg.opcode {
         OpCode::Text | OpCode::Binary => {
           let (masked, mask) = mask(&msg.payload);
-          ws.write_frame(Frame::new(
-            true,
-            msg.opcode,
-            Some(mask),
-            masked,
-          )).await?;
+          ws.write_frame(Frame::new(true, msg.opcode, Some(mask), masked))
+            .await?;
         }
         OpCode::Close => {
           break;
@@ -107,7 +111,7 @@ async fn main() -> Result<()> {
   }
 
   let mut ws = connect("updateReports?agent=fastwebsockets").await?;
-  ws.write_frame(Frame::close(1000, &[])).await?;
+  ws.write_frame(Frame::close(1000, &[], true)).await?;
 
   Ok(())
 }

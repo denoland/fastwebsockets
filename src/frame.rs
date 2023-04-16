@@ -52,6 +52,15 @@ macro_rules! repr_u8 {
     }
 }
 
+fn mask(payload: &[u8]) -> (Vec<u8>, [u8; 4]) {
+  let mask = [1, 2, 3, 4];
+  let mut masked = Vec::new();
+  for (i, byte) in payload.iter().enumerate() {
+    masked.push(byte ^ mask[i % 4]);
+  }
+  (masked, mask)
+}
+
 /// Represents a WebSocket frame.
 pub struct Frame {
   /// Indicates if this is the final frame in a message.
@@ -113,10 +122,19 @@ impl Frame {
   /// This is a convenience method for `Frame::new(true, OpCode::Close, None, payload)`.
   ///
   /// This method does not check if `code` is a valid close code and `reason` is valid UTF-8.
-  pub fn close(code: u16, reason: &[u8]) -> Self {
+  pub fn close(code: u16, reason: &[u8], m: bool) -> Self {
     let mut payload = Vec::with_capacity(2 + reason.len());
     payload.extend_from_slice(&code.to_be_bytes());
     payload.extend_from_slice(reason);
+    if m {
+      let (masked, mask) = mask(&payload);
+      return Self {
+        fin: true,
+        opcode: OpCode::Close,
+        mask: Some(mask),
+        payload: masked,
+      };
+    }
     Self {
       fin: true,
       opcode: OpCode::Close,
@@ -130,7 +148,17 @@ impl Frame {
   /// This is a convenience method for `Frame::new(true, OpCode::Close, None, payload)`.
   ///
   /// This method does not check if `payload` is valid Close frame payload.
-  pub fn close_raw(payload: Vec<u8>) -> Self {
+  pub fn close_raw(payload: Vec<u8>, m: bool) -> Self {
+    if m {
+      let (masked, mask) = mask(&payload);
+      return Self {
+        fin: true,
+        opcode: OpCode::Close,
+        mask: Some(mask),
+        payload: masked,
+      };
+    }
+
     Self {
       fin: true,
       opcode: OpCode::Close,
@@ -142,7 +170,17 @@ impl Frame {
   /// Create a new WebSocket pong `Frame`.
   ///
   /// This is a convenience method for `Frame::new(true, OpCode::Pong, None, payload)`.
-  pub fn pong(payload: Vec<u8>) -> Self {
+  pub fn pong(payload: Vec<u8>, m: bool) -> Self {
+    if m {
+      let (masked, mask) = mask(&payload);
+      return Self {
+        fin: true,
+        opcode: OpCode::Pong,
+        mask: Some(mask),
+        payload: masked,
+      };
+    }
+
     Self {
       fin: true,
       opcode: OpCode::Pong,
@@ -176,29 +214,27 @@ impl Frame {
   /// This method panics if the head buffer is not at least n-bytes long, where n is the size of the length field (0, 2, 4, or 10)
   pub fn fmt_head(&mut self, head: &mut [u8]) -> usize {
     head[0] = (self.fin as u8) << 7 | (self.opcode as u8);
-    
-    let offset = if self.mask.is_some() { 4 } else { 0 };
-    let mut start = 2;
-    if let Some(mask) = self.mask {
-      head[1] = 0x80;
-      head[start..6].copy_from_slice(&mask);
-      start = 6;
-    } else {
-      head[1] = 0;
-    }
 
     let len = self.payload.len();
-    if len < 126 {
-      head[1] |= len as u8;
-      2 + offset
+    let size = if len < 126 {
+      head[1] = len as u8;
+      2
     } else if len < 65536 {
-      head[1] |= 126;
-      head[start..start + 2].copy_from_slice(&(len as u16).to_be_bytes());
-      4 + offset
+      head[1] = 126;
+      head[2..4].copy_from_slice(&(len as u16).to_be_bytes());
+      4
     } else {
-      head[1] |= 127;
-      head[start..start + 8].copy_from_slice(&(len as u64).to_be_bytes());
-      10 + offset
+      head[1] = 127;
+      head[2..10].copy_from_slice(&(len as u64).to_be_bytes());
+      10
+    };
+
+    if let Some(mask) = self.mask {
+      head[1] |= 0x80;
+      head[size..size + 4].copy_from_slice(&mask);
+      size + 4
+    } else {
+      size
     }
   }
 
@@ -215,6 +251,7 @@ impl Frame {
     let size = self.fmt_head(&mut head);
 
     let total = size + self.payload.len();
+
     let mut b = [IoSlice::new(&head[..size]), IoSlice::new(&self.payload)];
 
     let mut n = stream.write_vectored(&b).await?;

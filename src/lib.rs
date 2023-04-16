@@ -234,7 +234,7 @@ impl<S> WebSocket<S> {
 
               if !code.is_allowed() {
                 self
-                  .write_frame(Frame::close(1002, &frame.payload[2..]))
+                  .write_frame(Frame::close(1002, &frame.payload[2..], true))
                   .await?;
 
                 return Err("invalid close code".into());
@@ -243,12 +243,12 @@ impl<S> WebSocket<S> {
           };
 
           self
-            .write_frame(Frame::close_raw(frame.payload.clone()))
+            .write_frame(Frame::close_raw(frame.payload.clone(), true))
             .await?;
           break Ok(frame);
         }
         OpCode::Ping if self.auto_pong => {
-          self.write_frame(Frame::pong(frame.payload)).await?;
+          self.write_frame(Frame::pong(frame.payload, true)).await?;
         }
         OpCode::Text => {
           if frame.fin && !frame.is_utf8() {
