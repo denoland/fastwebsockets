@@ -64,7 +64,7 @@ pub struct Frame {
   pub payload: Vec<u8>,
 }
 
-const MAX_HEAD_SIZE: usize = 10;
+const MAX_HEAD_SIZE: usize = 16;
 
 impl Frame {
   /// Creates a new WebSocket `Frame`.
@@ -117,6 +117,7 @@ impl Frame {
     let mut payload = Vec::with_capacity(2 + reason.len());
     payload.extend_from_slice(&code.to_be_bytes());
     payload.extend_from_slice(reason);
+
     Self {
       fin: true,
       opcode: OpCode::Close,
@@ -160,6 +161,16 @@ impl Frame {
     return std::str::from_utf8(&self.payload).is_ok();
   }
 
+  pub fn mask(&mut self) {
+    if let Some(mask) = self.mask {
+      crate::mask::unmask(&mut self.payload, mask);
+    } else {
+      let mask: [u8; 4] = rand::random();
+      crate::mask::unmask(&mut self.payload, mask);
+      self.mask = Some(mask);
+    }
+  }
+
   /// Unmasks the frame payload in-place. This method does nothing if the frame is not masked.
   ///
   /// Note: By default, the frame payload is unmasked by `WebSocket::read_frame`.
@@ -178,7 +189,7 @@ impl Frame {
     head[0] = (self.fin as u8) << 7 | (self.opcode as u8);
 
     let len = self.payload.len();
-    if len < 126 {
+    let size = if len < 126 {
       head[1] = len as u8;
       2
     } else if len < 65536 {
@@ -189,6 +200,14 @@ impl Frame {
       head[1] = 127;
       head[2..10].copy_from_slice(&(len as u64).to_be_bytes());
       10
+    };
+
+    if let Some(mask) = self.mask {
+      head[1] |= 0x80;
+      head[size..size + 4].copy_from_slice(&mask);
+      size + 4
+    } else {
+      size
     }
   }
 
@@ -205,6 +224,7 @@ impl Frame {
     let size = self.fmt_head(&mut head);
 
     let total = size + self.payload.len();
+
     let mut b = [IoSlice::new(&head[..size]), IoSlice::new(&self.payload)];
 
     let mut n = stream.write_vectored(&b).await?;
