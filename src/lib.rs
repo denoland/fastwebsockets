@@ -74,6 +74,8 @@ mod close;
 mod fragment;
 mod frame;
 mod mask;
+#[cfg(feature = "upgrade")]
+pub mod upgrade;
 
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
