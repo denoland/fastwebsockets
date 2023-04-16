@@ -15,6 +15,7 @@
 use hyper::upgrade::Upgraded;
 use hyper::Body;
 use hyper::Request;
+use hyper::Response;
 use hyper::StatusCode;
 
 use tokio::io::AsyncRead;
@@ -40,7 +41,7 @@ where
   });
 
   let response = sender.send_request(request).await?;
-  verify(response)?;
+  verify(&response)?;
 
   match hyper::upgrade::on(response).await {
     Ok(upgraded) => Ok(WebSocket::after_handshake(upgraded, Role::Client)),
@@ -49,7 +50,9 @@ where
 }
 
 // https://github.com/snapview/tungstenite-rs/blob/314feea3055a93e585882fb769854a912a7e6dae/src/handshake/client.rs#L189
-fn verify(response: &mut Response) -> Result<(), Box<dyn Error + Send + Sync>> {
+fn verify(
+  response: &Response<Body>,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
   if response.status() != StatusCode::SWITCHING_PROTOCOLS {
     return Err("Invalid status code".into());
   }
@@ -72,14 +75,6 @@ fn verify(response: &mut Response) -> Result<(), Box<dyn Error + Send + Sync>> {
     .unwrap_or(false)
   {
     return Err("Invalid Connection header".into());
-  }
-
-  if !headers
-    .get("Sec-WebSocket-Accept")
-    .map(|h| h == &self.accept_key)
-    .unwrap_or(false)
-  {
-    return Err("Invalid Sec-WebSocket-Accept header".into());
   }
 
   Ok(())
