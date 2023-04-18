@@ -41,9 +41,8 @@ async fn connect(path: &str) -> Result<FragmentCollector<Upgraded>> {
     .header("Sec-WebSocket-Version", "13")
     .body(Body::empty())?;
 
-  Ok(FragmentCollector::new(
-    fastwebsockets::handshake::client(req, stream).await?,
-  ))
+  let (ws, _) = fastwebsockets::handshake::client(req, stream).await?;
+  Ok(FragmentCollector::new(ws))
 }
 
 async fn get_case_count() -> Result<u32> {
