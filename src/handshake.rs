@@ -18,6 +18,9 @@ use hyper::Request;
 use hyper::Response;
 use hyper::StatusCode;
 
+use base64::engine::general_purpose::STANDARD;
+use base64::Engine;
+
 use tokio::io::AsyncRead;
 use tokio::io::AsyncWrite;
 
@@ -29,7 +32,7 @@ use crate::WebSocket;
 pub async fn client<S>(
   request: Request<Body>,
   socket: S,
-) -> Result<WebSocket<Upgraded>, Box<dyn Error + Send + Sync>>
+) -> Result<(WebSocket<Upgraded>, Response<Body>), Box<dyn Error + Send + Sync>>
 where
   S: AsyncRead + AsyncWrite + Send + Unpin + 'static,
 {
@@ -40,13 +43,23 @@ where
     }
   });
 
-  let response = sender.send_request(request).await?;
+  let mut response = sender.send_request(request).await?;
   verify(&response)?;
 
-  match hyper::upgrade::on(response).await {
-    Ok(upgraded) => Ok(WebSocket::after_handshake(upgraded, Role::Client)),
+  match hyper::upgrade::on(&mut response).await {
+    Ok(upgraded) => {
+      Ok((WebSocket::after_handshake(upgraded, Role::Client), response))
+    }
     Err(e) => Err(e.into()),
   }
+}
+
+/// Generate a random key for the `Sec-WebSocket-Key` header.
+pub fn generate_key() -> String {
+  // a base64-encoded (see Section 4 of [RFC4648]) value that,
+  // when decoded, is 16 bytes in length (RFC 6455)
+  let r: [u8; 16] = rand::random();
+  STANDARD.encode(&r)
 }
 
 // https://github.com/snapview/tungstenite-rs/blob/314feea3055a93e585882fb769854a912a7e6dae/src/handshake/client.rs#L189

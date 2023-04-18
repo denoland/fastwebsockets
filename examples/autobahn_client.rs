@@ -34,7 +34,10 @@ async fn connect(path: &str) -> Result<FragmentCollector<Upgraded>> {
     .header("Host", "localhost:9001")
     .header(UPGRADE, "websocket")
     .header(CONNECTION, "upgrade")
-    .header("Sec-WebSocket-Key", "gn/tcQDBSTmTj39Xf8bBNg==")
+    .header(
+      "Sec-WebSocket-Key",
+      fastwebsockets::handshake::generate_key(),
+    )
     .header("Sec-WebSocket-Version", "13")
     .body(Body::empty())?;
 

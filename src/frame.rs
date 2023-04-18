@@ -233,7 +233,7 @@ impl Frame {
     }
 
     // Slighly more optimized than (unstable) write_all_vectored for 2 iovecs.
-    while n < size {
+    while n <= size {
       b[0] = IoSlice::new(&head[n..size]);
       n += stream.write_vectored(&b).await?;
     }
