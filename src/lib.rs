@@ -260,18 +260,18 @@ impl<S> WebSocket<S> {
               std::str::from_utf8(&frame.payload[2..])?;
 
               if !code.is_allowed() {
-                self
+                let _ = self
                   .write_frame(Frame::close(1002, &frame.payload[2..]))
-                  .await?;
+                  .await;
 
                 return Err("invalid close code".into());
               }
             }
           };
 
-          self
+          let _ = self
             .write_frame(Frame::close_raw(frame.payload.clone()))
-            .await?;
+            .await;
           break Ok(frame);
         }
         OpCode::Ping if self.auto_pong => {
