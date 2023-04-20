@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::future::Future;
+
 use fastwebsockets::FragmentCollector;
 use fastwebsockets::Frame;
 use fastwebsockets::OpCode;
@@ -24,6 +26,18 @@ use tokio::net::TcpStream;
 
 type Result<T> =
   std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
+
+struct LocalExecutor;
+
+impl<Fut> hyper::rt::Executor<Fut> for LocalExecutor
+where
+  Fut: Future + 'static,
+  Fut::Output: 'static,
+{
+  fn execute(&self, fut: Fut) {
+    tokio::task::spawn_local(fut);
+  }
+}
 
 async fn connect(path: &str) -> Result<FragmentCollector<Upgraded>> {
   let stream = TcpStream::connect("localhost:9001").await?;
@@ -41,7 +55,8 @@ async fn connect(path: &str) -> Result<FragmentCollector<Upgraded>> {
     .header("Sec-WebSocket-Version", "13")
     .body(Body::empty())?;
 
-  let (ws, _) = fastwebsockets::handshake::client(req, stream).await?;
+  let (ws, _) =
+    fastwebsockets::handshake::client(&LocalExecutor, stream, req).await?;
   Ok(FragmentCollector::new(ws))
 }
 
