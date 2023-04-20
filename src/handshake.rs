@@ -32,7 +32,23 @@ use crate::Role;
 use crate::WebSocket;
 
 pub async fn client<S>(
-  executor: &dyn hyper::rt::Executor<Pin<Box<dyn Future<Output = ()>>>>,
+pub async fn client<S, E>(
+  executor: E,
+  socket: S,
+  request: Request<Body>,
+) -> Result<(WebSocket<Upgraded>, Response<Body>), Box<dyn Error + Send + Sync>>
+where
+  S: AsyncRead + AsyncWrite + Send + Unpin + 'static,
+  E: hyper::rt::Executor<Box<dyn Future<Output = ()> + Send + Unpin>> + 'static
+{
+  let (mut sender, conn) = hyper::client::conn::handshake(socket).await?;
+  let fut = Box::pin(async move {
+    if let Err(e) = conn.await {
+      eprintln!("Error polling connection: {}", e);
+    }
+  });
+  executor.execute(Box::new(fut));
+
   socket: S,
   request: Request<Body>,
 ) -> Result<(WebSocket<Upgraded>, Response<Body>), Box<dyn Error + Send + Sync>>
