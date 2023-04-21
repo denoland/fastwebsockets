@@ -26,6 +26,7 @@ use tokio::io::AsyncWrite;
 
 use std::error::Error;
 use std::future::Future;
+use std::pin::Pin;
 
 use crate::Role;
 use crate::WebSocket;
@@ -37,7 +38,7 @@ pub async fn client<S, E>(
 ) -> Result<(WebSocket<Upgraded>, Response<Body>), Box<dyn Error + Send + Sync>>
 where
   S: AsyncRead + AsyncWrite + Send + Unpin + 'static,
-  E: hyper::rt::Executor<Box<dyn Future<Output = ()> + Send + Unpin>> + 'static,
+  E: hyper::rt::Executor<Pin<Box<dyn Future<Output = ()> + Send>>>,
 {
   let (mut sender, conn) = hyper::client::conn::handshake(socket).await?;
   let fut = Box::pin(async move {
@@ -45,7 +46,7 @@ where
       eprintln!("Error polling connection: {}", e);
     }
   });
-  executor.execute(Box::new(fut));
+  executor.execute(fut);
 
   let mut response = sender.send_request(request).await?;
   verify(&response)?;
