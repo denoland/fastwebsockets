@@ -104,6 +104,7 @@ pub struct WebSocket<S> {
   auto_pong: bool,
   max_message_size: usize,
   auto_apply_mask: bool,
+  closed: bool,
   role: Role,
 }
 
@@ -140,6 +141,7 @@ impl<S> WebSocket<S> {
       auto_pong: true,
       auto_apply_mask: true,
       max_message_size: 64 << 20,
+      closed: false,
       role,
     }
   }
@@ -202,6 +204,10 @@ impl<S> WebSocket<S> {
       frame.mask();
     }
 
+    if frame.opcode == OpCode::Close {
+      self.closed = true;
+    }
+
     if self.vectored {
       frame.writev(&mut self.stream).await?;
     } else {
@@ -244,7 +250,7 @@ impl<S> WebSocket<S> {
       };
 
       match frame.opcode {
-        OpCode::Close if self.auto_close => {
+        OpCode::Close if self.auto_close && !self.closed => {
           match frame.payload.len() {
             0 => {}
             1 => return Err("invalid close frame".into()),
