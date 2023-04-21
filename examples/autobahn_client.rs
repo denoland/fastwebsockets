@@ -27,12 +27,12 @@ use tokio::net::TcpStream;
 type Result<T> =
   std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
-struct LocalExecutor;
+struct SpawnExecutor;
 
-impl<Fut> hyper::rt::Executor<Fut> for LocalExecutor
+impl<Fut> hyper::rt::Executor<Fut> for SpawnExecutor
 where
-  Fut: Future + 'static,
-  Fut::Output: 'static,
+  Fut: Future + Send + 'static,
+  Fut::Output: Send + 'static,
 {
   fn execute(&self, fut: Fut) {
     tokio::task::spawn_local(fut);
@@ -56,7 +56,7 @@ async fn connect(path: &str) -> Result<FragmentCollector<Upgraded>> {
     .body(Body::empty())?;
 
   let (ws, _) =
-    fastwebsockets::handshake::client(&LocalExecutor, req, stream).await?;
+    fastwebsockets::handshake::client(&SpawnExecutor, req, stream).await?;
   Ok(FragmentCollector::new(ws))
 }
 
