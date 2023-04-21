@@ -22,8 +22,8 @@ jobs:
           override: true
           components: rustfmt
     - name: Build
-      run: cargo build --verbose
+      run: cargo build --verbose --all-features --all-targets
     - name: Test
-      run: cargo test --verbose
+      run: cargo test --verbose --all-features
     - name: Check formatting
       run: cargo fmt -- --check --verbose

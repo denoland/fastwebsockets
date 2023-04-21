@@ -6,6 +6,7 @@ use hyper::Body;
 use hyper::Request;
 use std::future::Future;
 use tokio::net::TcpStream;
+
 struct SpawnExecutor;
 
 impl<Fut> hyper::rt::Executor<Fut> for SpawnExecutor
