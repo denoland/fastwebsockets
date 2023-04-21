@@ -249,6 +249,10 @@ impl<S> WebSocket<S> {
         frame.unmask()
       };
 
+      if self.closed && frame.opcode != OpCode::Close {
+        return Err("connection is closed".into());
+      }
+
       match frame.opcode {
         OpCode::Close if self.auto_close && !self.closed => {
           match frame.payload.len() {
