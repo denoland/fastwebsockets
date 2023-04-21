@@ -292,7 +292,7 @@ dependencies = [
 
 [[package]]
 name = "fastwebsockets"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "assert2",
  "base64",
