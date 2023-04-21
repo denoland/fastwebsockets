@@ -35,10 +35,9 @@ simd = ["cc", "simdutf8/aarch64_neon"]
 upgrade = ["hyper", "pin-project", "base64", "sha1"]
 
 [dev-dependencies]
-# examples
-tokio = { version = "1.25.0", features = ["full"] }
-hyper = { version = "0.14.26", features = ["http1", "server", "client"] }
-
+tokio = { version = "1.25.0", features = ["full", "macros"] }
+hyper = { version = "0.14.26", features = ["http1", "server", "client", "tcp"] }
+assert2 = "0.3.4"
 # bench
 criterion = "0.4.0"
 
