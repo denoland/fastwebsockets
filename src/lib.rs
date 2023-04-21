@@ -294,7 +294,6 @@ impl<S> WebSocket<S> {
 
           break Ok(frame);
         }
-        OpCode::Pong => {}
         _ => break Ok(frame),
       }
     }
