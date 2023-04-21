@@ -56,7 +56,7 @@ async fn connect(path: &str) -> Result<FragmentCollector<Upgraded>> {
     .body(Body::empty())?;
 
   let (ws, _) =
-    fastwebsockets::handshake::client(&LocalExecutor, stream, req).await?;
+    fastwebsockets::handshake::client(&LocalExecutor, req, stream).await?;
   Ok(FragmentCollector::new(ws))
 }
 
