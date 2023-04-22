@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#[cfg(not(target_arch = "aarch64"))]
+#[cfg(not(all(target_arch = "aarch64", feature = "simd")))]
+#[inline]
 fn unmask_easy(payload: &mut [u8], mask: [u8; 4]) {
   for i in 0..payload.len() {
     payload[i] ^= mask[i & 3];
@@ -22,10 +23,10 @@ fn unmask_easy(payload: &mut [u8], mask: [u8; 4]) {
 /// Unmask a payload using the given 4-byte mask.
 #[inline]
 pub fn unmask(payload: &mut [u8], mask: [u8; 4]) {
-  #[cfg(not(target_arch = "aarch64"))]
+  #[cfg(not(all(target_arch = "aarch64", feature = "simd")))]
   return unmask_easy(payload, mask);
 
-  #[cfg(target_arch = "aarch64")]
+  #[cfg(all(target_arch = "aarch64", feature = "simd"))]
   unsafe {
     // ~10% faster on small payloads (1024)
     // ~30% faster on largest default payload (64 << 20)
