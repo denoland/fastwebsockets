@@ -24,12 +24,7 @@ use tokio::net::TcpListener;
 async fn handle_client(
   fut: upgrade::UpgradeFut,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-  let mut ws = fut.await?;
-  ws.set_writev(true);
-  ws.set_auto_close(true);
-  ws.set_auto_pong(true);
-
-  let mut ws = fastwebsockets::FragmentCollector::new(ws);
+  let mut ws = fastwebsockets::FragmentCollector::new(fut.await?);
 
   loop {
     let frame = ws.read_frame().await?;
