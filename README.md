@@ -2,14 +2,14 @@
 
 [Documentation](https://docs.rs/fastwebsockets)
 
-_fastwebsockets_ is a fast WebSocket server implementation.
+_fastwebsockets_ is a fast WebSocket protocol implementation.
 
 Passes the
 Autobahn|TestSuite<sup><a href="https://littledivy.github.io/fastwebsockets/servers/">1</a></sup>
 and fuzzed with LLVM's libfuzzer.
 
 You can use it as a raw websocket frame parser and deal with spec compliance
-yourself, or you can use it as a full-fledged websocket server.
+yourself, or you can use it as a full-fledged websocket client/server.
 
 ```rust
 use fastwebsockets::{Frame, OpCode, WebSocket};
@@ -59,11 +59,12 @@ assert!(incoming.fin);
 
 > permessage-deflate is not supported yet.
 
-**Upgrade**
+**HTTP Upgrade**
 
-Enable the `upgrade` feature to do server-side upgrades and client-side handshakes.
+Enable the `upgrade` feature to do server-side upgrades and client-side
+handshakes.
 
-This feature is powered by [hyper](docs.rs/hyper).
+This feature is powered by [hyper](https://docs.rs/hyper).
 
 ```rust
 use fastwebsockets::upgrade::upgrade;
