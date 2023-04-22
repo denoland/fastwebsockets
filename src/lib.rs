@@ -146,6 +146,12 @@ impl<S> WebSocket<S> {
     }
   }
 
+  /// Consumes the `WebSocket` and returns the underlying stream.
+  #[inline]
+  pub fn into_inner(self) -> S {
+    self.stream
+  }
+
   /// Sets whether to use vectored writes. This option does not guarantee that vectored writes will be always used.
   ///
   /// Default: `true`
