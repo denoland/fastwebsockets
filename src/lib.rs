@@ -22,17 +22,14 @@
 //!
 //! # Example
 //!
-//! ```ignore
+//! ```
 //! use tokio::net::TcpStream;
-//! use fastwebsockets::{WebSocket, OpCode};
+//! use fastwebsockets::{WebSocket, OpCode, Role};
 //!
-//! async fn handle_client(
+//! async fn handle(
 //!   socket: TcpStream,
 //! ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-//!   // Perform the WebSocket handshake
-//!   let socket = handshake(socket).await?;
-//!
-//!   let mut ws = WebSocket::after_handshake(socket);
+//!   let mut ws = WebSocket::after_handshake(socket, Role::Server);
 //!   ws.set_writev(false);
 //!   ws.set_auto_close(true);
 //!   ws.set_auto_pong(true);
@@ -58,25 +55,109 @@
 //! concatenated.
 //!
 //! For concanated frames, use `FragmentCollector`:
-//! ```ignore
-//! use fastwebsockets::{FragmentCollector, WebSocket};
+//! ```
+//! use fastwebsockets::{FragmentCollector, WebSocket, Role};
+//! use tokio::net::TcpStream;
 //!
-//! let mut ws = WebSocket::after_handshake(socket);
-//! let mut ws = FragmentCollector::new(ws);
-//! let incoming = ws.read_frame().await?;
-//! // Always returns full messages
-//! assert!(incoming.fin);
+//! async fn handle(
+//!   socket: TcpStream,
+//! ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+//!   let mut ws = WebSocket::after_handshake(socket, Role::Server);
+//!   let mut ws = FragmentCollector::new(ws);
+//!   let incoming = ws.read_frame().await?;
+//!   // Always returns full messages
+//!   assert!(incoming.fin);
+//!   Ok(())
+//! }
 //! ```
 //!
 //! _permessage-deflate is not supported yet._
 //!
+//! ## HTTP Upgrades
+//!
+//! Enable the `upgrade` feature to do server-side upgrades and client-side
+//! handshakes.
+//!
+//! This feature is powered by [hyper](https://docs.rs/hyper).
+//!
+//! ```
+//! use fastwebsockets::upgrade::upgrade;
+//! use hyper::{Request, Body, Response};
+//!
+//! async fn server_upgrade(
+//!   mut req: Request<Body>,
+//! ) -> Result<Response<Body>, Box<dyn std::error::Error + Send + Sync>> {
+//!   let (response, fut) = upgrade(&mut req)?;
+//!
+//!   tokio::spawn(async move {
+//!     let ws = fut.await;
+//!     // Do something with the websocket
+//!   });
+//!
+//!   Ok(response)
+//! }
+//! ```
+//!
+//! Use the `handshake` module for client-side handshakes.
+//!
+//! ```
+//! use fastwebsockets::handshake;
+//! use fastwebsockets::FragmentCollector;
+//! use hyper::{Request, Body, upgrade::Upgraded, header::{UPGRADE, CONNECTION}};
+//! use tokio::net::TcpStream;
+//! use std::future::Future;
+//!
+//! // Define a type alias for convenience
+//! type Result<T> =
+//!   std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
+//!
+//! async fn connect() -> Result<FragmentCollector<Upgraded>> {
+//!   let stream = TcpStream::connect("localhost:9001").await?;
+//!
+//!   let req = Request::builder()
+//!     .method("GET")
+//!     .uri("http://localhost:9001/")
+//!     .header("Host", "localhost:9001")
+//!     .header(UPGRADE, "websocket")
+//!     .header(CONNECTION, "upgrade")
+//!     .header(
+//!       "Sec-WebSocket-Key",
+//!       fastwebsockets::handshake::generate_key(),
+//!     )
+//!     .header("Sec-WebSocket-Version", "13")
+//!     .body(Body::empty())?;
+//!
+//!   let (ws, _) = handshake::client(&SpawnExecutor, req, stream).await?;
+//!   Ok(FragmentCollector::new(ws))
+//! }
+//!
+//! // Tie hyper's executor to tokio runtime
+//! struct SpawnExecutor;
+//!
+//! impl<Fut> hyper::rt::Executor<Fut> for SpawnExecutor
+//! where
+//!   Fut: Future + Send + 'static,
+//!   Fut::Output: Send + 'static,
+//! {
+//!   fn execute(&self, fut: Fut) {
+//!     tokio::task::spawn(fut);
+//!   }
+//! }
+//! ```
+
+#![cfg_attr(docsrs, feature(doc_cfg))]
+
 mod close;
 mod fragment;
 mod frame;
+/// Client handshake.
 #[cfg(feature = "upgrade")]
+#[cfg_attr(docsrs, doc(cfg(feature = "upgrade")))]
 pub mod handshake;
 mod mask;
+/// HTTP upgrades.
 #[cfg(feature = "upgrade")]
+#[cfg_attr(docsrs, doc(cfg(feature = "upgrade")))]
 pub mod upgrade;
 
 use tokio::io::AsyncReadExt;
@@ -111,21 +192,20 @@ pub struct WebSocket<S> {
 impl<S> WebSocket<S> {
   /// Creates a new `WebSocket` from a stream that has already completed the WebSocket handshake.
   ///
-  /// Currently, this crate does not handle the WebSocket handshake, so you should need to do that yourself.
+  /// Use the `upgrade` feature to handle server upgrades and client handshakes.
   ///
   /// # Example
   ///
-  /// ```ignore
+  /// ```
   /// use tokio::net::TcpStream;
-  /// use fastwebsockets::{WebSocket, OpCode};
+  /// use fastwebsockets::{WebSocket, OpCode, Role};
   ///
   /// async fn handle_client(
   ///   socket: TcpStream,
   /// ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-  ///   // Perform the WebSocket handshake
-  ///   let socket = handshake(socket).await?;
-  ///   let mut ws = WebSocket::after_handshake(socket);
+  ///   let mut ws = WebSocket::after_handshake(socket, Role::Server);
   ///   // ...
+  ///   Ok(())
   /// }
   /// ```
   pub fn after_handshake(stream: S, role: Role) -> Self
@@ -193,11 +273,17 @@ impl<S> WebSocket<S> {
   ///
   /// # Example
   ///
-  /// ```ignore
-  /// use fastwebsockets::Frame;
+  /// ```
+  /// use fastwebsockets::{WebSocket, Frame, OpCode};
+  /// use tokio::net::TcpStream;
   ///
-  /// let mut frame = Frame::text(vec![0x01, 0x02, 0x03]);
-  /// ws.write_frame(frame).await?;
+  /// async fn send(
+  ///   ws: &mut WebSocket<TcpStream>
+  /// ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+  ///   let mut frame = Frame::binary(vec![0x01, 0x02, 0x03]);
+  ///   ws.write_frame(frame).await?;
+  ///   Ok(())
+  /// }
   /// ```
   pub async fn write_frame(
     &mut self,
@@ -232,15 +318,21 @@ impl<S> WebSocket<S> {
   ///
   /// # Example
   ///
-  /// ```ignore
-  /// use fastwebsockets::OpCode;
+  /// ```
+  /// use fastwebsockets::{OpCode, WebSocket, Frame};
+  /// use tokio::net::TcpStream;
   ///
-  /// let frame = ws.read_frame().await?;
-  /// match frame.opcode {
-  ///   OpCode::Text | OpCode::Binary => {
-  ///     ws.write_frame(frame).await?;
+  /// async fn echo(
+  ///   ws: &mut WebSocket<TcpStream>
+  /// ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+  ///   let frame = ws.read_frame().await?;
+  ///   match frame.opcode {
+  ///     OpCode::Text | OpCode::Binary => {
+  ///       ws.write_frame(frame).await?;
+  ///     }
+  ///     _ => {}
   ///   }
-  ///   _ => {}
+  ///   Ok(())
   /// }
   /// ```
   pub async fn read_frame(

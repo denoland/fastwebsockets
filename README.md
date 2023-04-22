@@ -89,8 +89,8 @@ Use the `handshake` module for client-side handshakes.
 
 ```rust
 use fastwebsockets::handshake;
-use fastwebsockets::FragmentCollector;
-use hyper::{Request, Body, header::{UPGRADE, CONNECTION}};
+use fastwebsockets::WebSocket;
+use hyper::{Request, Body, upgrade::Upgraded, header::{UPGRADE, CONNECTION}};
 use tokio::net::TcpStream;
 use std::future::Future;
 
@@ -98,7 +98,7 @@ use std::future::Future;
 type Result<T> =
   std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
-async fn connect() -> Result<FragmentCollector<Upgraded>> {
+async fn connect() -> Result<WebSocket<Upgraded>> {
   let stream = TcpStream::connect("localhost:9001").await?;
 
   let req = Request::builder()
@@ -115,7 +115,7 @@ async fn connect() -> Result<FragmentCollector<Upgraded>> {
     .body(Body::empty())?;
 
   let (ws, _) = handshake::client(&SpawnExecutor, req, stream).await?;
-  Ok(FragmentCollector::new(ws))
+  Ok(ws)
 }
 
 // Tie hyper's executor to tokio runtime

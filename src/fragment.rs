@@ -41,16 +41,14 @@ impl Fragment {
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```
 /// use tokio::net::TcpStream;
-/// use fastwebsockets::{WebSocket, FragmentCollector, OpCode};
+/// use fastwebsockets::{WebSocket, FragmentCollector, OpCode, Role};
 ///
 /// async fn handle_client(
 ///   socket: TcpStream,
 /// ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-///   let socket = handshake(socket).await?;
-///
-///   let ws = WebSocket::after_handshake(socket);
+///   let ws = WebSocket::after_handshake(socket, Role::Server);
 ///   let mut ws = FragmentCollector::new(ws);
 ///
 ///   loop {
