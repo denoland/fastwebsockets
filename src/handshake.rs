@@ -31,6 +31,57 @@ use std::pin::Pin;
 use crate::Role;
 use crate::WebSocket;
 
+/// Perform the client handshake.
+///
+/// This function is used to perform the client handshake. It takes a hyper
+/// executor, a `hyper::Request` and a stream.
+///
+/// # Example
+///
+/// ```
+/// use fastwebsockets::handshake;
+/// use fastwebsockets::WebSocket;
+/// use hyper::{Request, Body, upgrade::Upgraded, header::{UPGRADE, CONNECTION}};
+/// use tokio::net::TcpStream;
+/// use std::future::Future;
+///
+/// // Define a type alias for convenience
+/// type Result<T> =
+///   std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
+///
+/// async fn connect() -> Result<WebSocket<Upgraded>> {
+///   let stream = TcpStream::connect("localhost:9001").await?;
+///
+///   let req = Request::builder()
+///     .method("GET")
+///     .uri("http://localhost:9001/")
+///     .header("Host", "localhost:9001")
+///     .header(UPGRADE, "websocket")
+///     .header(CONNECTION, "upgrade")
+///     .header(
+///       "Sec-WebSocket-Key",
+///       fastwebsockets::handshake::generate_key(),
+///     )
+///     .header("Sec-WebSocket-Version", "13")
+///     .body(Body::empty())?;
+///
+///   let (ws, _) = handshake::client(&SpawnExecutor, req, stream).await?;
+///   Ok(ws)
+/// }
+///
+/// // Tie hyper's executor to tokio runtime
+/// struct SpawnExecutor;
+///
+/// impl<Fut> hyper::rt::Executor<Fut> for SpawnExecutor
+/// where
+///   Fut: Future + Send + 'static,
+///   Fut::Output: Send + 'static,
+/// {
+///   fn execute(&self, fut: Fut) {
+///     tokio::task::spawn(fut);
+///   }
+/// }
+/// ```
 pub async fn client<S, E>(
   executor: &E,
   request: Request<Body>,

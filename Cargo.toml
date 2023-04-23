@@ -36,6 +36,8 @@ upgrade = ["hyper", "pin-project", "base64", "sha1"]
 
 [dev-dependencies]
 tokio = { version = "1.25.0", features = ["full", "macros"] }
+tokio-rustls = "0.24.0"
+rustls-pemfile = "1.0"
 hyper = { version = "0.14.26", features = ["http1", "server", "client", "tcp"] }
 assert2 = "0.3.4"
 trybuild = "1.0.80"
@@ -50,3 +52,6 @@ harness = false
 opt-level = 3
 lto = true
 codegen-units = 1
+
+[package.metadata.docs.rs]
+features = ["upgrade"]
