@@ -21,9 +21,17 @@ jobs:
           toolchain: nightly
           override: true
           components: rustfmt
+    - uses: denoland/setup-deno@v1
+      with:
+        deno-version: v1.x
     - name: Build
       run: cargo build --verbose --all-features --all-targets
     - name: Test
       run: cargo test --verbose --all-features
     - name: Check formatting
       run: cargo fmt -- --check --verbose
+    - name: Autobahn|Testsuite
+      if: matrix.os == 'ubuntu-latest'
+      run: |
+        cargo build --verbose --release --all-features --example echo_server
+        deno run -A --unstable autobahn/server-test.js
