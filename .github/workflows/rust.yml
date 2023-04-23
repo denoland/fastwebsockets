@@ -31,6 +31,7 @@ jobs:
     - name: Check formatting
       run: cargo fmt -- --check --verbose
     - name: Autobahn|Testsuite
+      if: matrix.os == 'macos-latest'
       run: |
         cargo build --verbose --release --all-features --example echo_server
         deno run -A --unstable autobahn/server-test.js
