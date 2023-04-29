@@ -403,6 +403,15 @@ impl<S> WebSocket<S> {
   where
     S: AsyncReadExt + AsyncWriteExt + Unpin,
   {
+    macro_rules! eof {
+      ($n:expr) => {{
+        let n = $n;
+        if n == 0 {
+          return Err("unexpected eof".into());
+        }
+        n
+      }};
+    }
     let mut head = [0; 2 + 4 + 100];
 
     let mut nread = 0;
@@ -413,7 +422,7 @@ impl<S> WebSocket<S> {
     }
 
     while nread < 2 {
-      nread += self.stream.read(&mut head[nread..]).await?;
+      nread += eof!(self.stream.read(&mut head[nread..]).await?);
     }
 
     let fin = head[0] & 0b10000000 != 0;
@@ -438,7 +447,7 @@ impl<S> WebSocket<S> {
 
     let length: usize = if extra > 0 {
       while nread < 2 + extra {
-        nread += self.stream.read(&mut head[nread..]).await?;
+        nread += eof!(self.stream.read(&mut head[nread..]).await?);
       }
 
       match extra {
@@ -453,7 +462,7 @@ impl<S> WebSocket<S> {
     let mask = match masked {
       true => {
         while nread < 2 + extra + 4 {
-          nread += self.stream.read(&mut head[nread..]).await?;
+          nread += eof!(self.stream.read(&mut head[nread..]).await?);
         }
 
         Some(head[2 + extra..2 + extra + 4].try_into().unwrap())
