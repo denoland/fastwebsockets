@@ -180,6 +180,7 @@ pub struct WebSocket<S> {
   stream: S,
   write_buffer: Vec<u8>,
   read_buffer: Option<Vec<u8>>,
+  partial_write: Option<Vec<u8>>,
   vectored: bool,
   auto_close: bool,
   auto_pong: bool,
@@ -215,6 +216,7 @@ impl<S> WebSocket<S> {
     Self {
       stream,
       write_buffer: Vec::with_capacity(2),
+      partial_write: None,
       read_buffer: None,
       vectored: true,
       auto_close: true,
@@ -292,6 +294,12 @@ impl<S> WebSocket<S> {
   where
     S: AsyncReadExt + AsyncWriteExt + Unpin,
   {
+    // A try_write didn't send the whole frame.
+    if let Some(partial) = self.partial_write.take() {
+      self.stream.write_all(&partial).await?;
+      return Ok(());
+    }
+
     if self.role == Role::Client && self.auto_apply_mask {
       frame.mask();
     }
@@ -308,6 +316,23 @@ impl<S> WebSocket<S> {
     }
 
     Ok(())
+  }
+
+  pub fn try_write_frame(
+    &mut self,
+    mut frame: Frame,
+    cb: impl FnOnce(&mut S, &[u8]) -> std::io::Result<usize>,
+  ) -> bool {
+    debug_assert!(self.partial_write.is_none()); // There should be no partial write in progress
+
+    let text = frame.write(&mut self.write_buffer);
+    let written = cb(&mut self.stream, text).unwrap_or(0);
+    // Not the most optimal approach, but this is the slow path anyway.
+    if written < text.len() {
+      self.partial_write = Some(text[written..].to_vec());
+    }
+
+    self.partial_write.is_none()
   }
 
   /// Reads a frame from the stream.
