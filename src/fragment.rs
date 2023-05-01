@@ -101,7 +101,12 @@ impl<'f, S> FragmentCollector<S> {
             if self.fragments.is_some() {
               return Err("Invalid fragment".into());
             }
-            return Ok(Frame::new(true, frame.opcode, None, frame.payload.into()));
+            return Ok(Frame::new(
+              true,
+              frame.opcode,
+              None,
+              frame.payload.into(),
+            ));
           } else {
             self.fragments = match frame.opcode {
               OpCode::Text => match utf8::decode(&frame.payload) {
