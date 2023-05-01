@@ -280,7 +280,7 @@ impl<'f, S> WebSocket<S> {
   /// async fn send(
   ///   ws: &mut WebSocket<TcpStream>
   /// ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-  ///   let mut frame = Frame::binary(vec![0x01, 0x02, 0x03]);
+  ///   let mut frame = Frame::binary(vec![0x01, 0x02, 0x03].into());
   ///   ws.write_frame(frame).await?;
   ///   Ok(())
   /// }

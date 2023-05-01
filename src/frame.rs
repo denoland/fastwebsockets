@@ -165,10 +165,10 @@ impl<'f> Frame<'f> {
 
   pub fn mask(&mut self) {
     if let Some(mask) = self.mask {
-      crate::mask::unmask(&mut self.payload, mask);
+      crate::mask::unmask(self.payload.to_mut(), mask);
     } else {
       let mask: [u8; 4] = rand::random();
-      crate::mask::unmask(&mut self.payload, mask);
+      crate::mask::unmask(self.payload.to_mut(), mask);
       self.mask = Some(mask);
     }
   }
@@ -178,7 +178,7 @@ impl<'f> Frame<'f> {
   /// Note: By default, the frame payload is unmasked by `WebSocket::read_frame`.
   pub fn unmask(&mut self) {
     if let Some(mask) = self.mask {
-      crate::mask::unmask(&mut self.payload, mask);
+      crate::mask::unmask(self.payload.to_mut(), mask);
     }
   }
 

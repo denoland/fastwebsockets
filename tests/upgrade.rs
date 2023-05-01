@@ -64,11 +64,11 @@ async fn hyper() {
 
   let_assert!(Ok(message) = stream.read_frame().await);
   assert!(message.opcode == fastwebsockets::OpCode::Text);
-  assert!(message.payload == b"Hello!");
+  assert!(message.payload.into_owned() == b"Hello!");
 
   let_assert!(
     Ok(()) = stream
-      .write_frame(fastwebsockets::Frame::text(b"Goodbye!".to_vec()))
+      .write_frame(fastwebsockets::Frame::text(b"Goodbye!".to_vec().into()))
       .await
   );
   let_assert!(Ok(close_frame) = stream.read_frame().await);
@@ -83,12 +83,12 @@ async fn upgrade_websocket(
   let (response, stream) = fastwebsockets::upgrade::upgrade(&mut request)?;
   tokio::spawn(async move {
     let_assert!(Ok(mut stream) = stream.await);
-    assert!(let Ok(()) = stream.write_frame(fastwebsockets::Frame::text(b"Hello!".to_vec())).await);
+    assert!(let Ok(()) = stream.write_frame(fastwebsockets::Frame::text(b"Hello!".to_vec().into())).await);
     let_assert!(Ok(reply) = stream.read_frame().await);
     assert!(reply.opcode == fastwebsockets::OpCode::Text);
-    assert!(reply.payload == b"Goodbye!");
+    assert!(reply.payload.into_owned() == b"Goodbye!");
 
-    assert!(let Ok(()) = stream.write_frame(fastwebsockets::Frame::close_raw(vec![])).await);
+    assert!(let Ok(()) = stream.write_frame(fastwebsockets::Frame::close_raw(vec![].into())).await);
   });
 
   Ok(response)

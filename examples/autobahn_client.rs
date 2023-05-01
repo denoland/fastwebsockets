@@ -80,7 +80,7 @@ async fn main() -> Result<()> {
         Ok(msg) => msg,
         Err(e) => {
           println!("Error: {}", e);
-          ws.write_frame(Frame::close_raw(vec![])).await?;
+          ws.write_frame(Frame::close_raw(vec![].into())).await?;
           break;
         }
       };
