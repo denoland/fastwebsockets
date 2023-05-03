@@ -5,7 +5,7 @@
 _fastwebsockets_ is a fast WebSocket protocol implementation.
 
 Passes the
-Autobahn|TestSuite<sup><a href="https://littledivy.github.io/fastwebsockets/servers/">1</a></sup>
+Autobahn|TestSuite<sup><a href="https://denoland.github.io/fastwebsockets/servers/">1</a></sup>
 and fuzzed with LLVM's libfuzzer.
 
 You can use it as a raw websocket frame parser and deal with spec compliance
