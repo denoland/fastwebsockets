@@ -209,4 +209,15 @@ impl<'f, S> FragmentCollector<S> {
     self.ws.write_frame(frame).await?;
     Ok(())
   }
+
+  pub fn try_write_frame(
+    &mut self,
+    frame: Frame,
+    cb: impl FnOnce(&mut S, &[u8]) -> std::io::Result<usize>,
+  ) -> bool
+  where
+    S: AsyncReadExt + AsyncWriteExt + Unpin,
+  {
+    self.ws.try_write_frame(frame, cb)
+  }
 }
