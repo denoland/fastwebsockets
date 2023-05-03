@@ -160,6 +160,8 @@ mod mask;
 #[cfg_attr(docsrs, doc(cfg(feature = "upgrade")))]
 pub mod upgrade;
 
+use bytes::Bytes;
+use bytes::BytesMut;
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
 
@@ -179,7 +181,8 @@ pub enum Role {
 pub struct WebSocket<S> {
   stream: S,
   write_buffer: Vec<u8>,
-  read_buffer: Option<Vec<u8>>,
+  read_buffer: BytesMut,
+  partial_write: Option<Vec<u8>>,
   vectored: bool,
   auto_close: bool,
   auto_pong: bool,
@@ -187,9 +190,10 @@ pub struct WebSocket<S> {
   auto_apply_mask: bool,
   closed: bool,
   role: Role,
+  nread: Option<usize>,
 }
 
-impl<'f, S> WebSocket<S> {
+impl<S> WebSocket<S> {
   /// Creates a new `WebSocket` from a stream that has already completed the WebSocket handshake.
   ///
   /// Use the `upgrade` feature to handle server upgrades and client handshakes.
@@ -215,13 +219,15 @@ impl<'f, S> WebSocket<S> {
     Self {
       stream,
       write_buffer: Vec::with_capacity(2),
-      read_buffer: None,
+      partial_write: None,
+      read_buffer: BytesMut::zeroed(106),
       vectored: true,
       auto_close: true,
       auto_pong: true,
       auto_apply_mask: true,
       max_message_size: 64 << 20,
       closed: false,
+      nread: None,
       role,
     }
   }
@@ -280,18 +286,24 @@ impl<'f, S> WebSocket<S> {
   /// async fn send(
   ///   ws: &mut WebSocket<TcpStream>
   /// ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-  ///   let mut frame = Frame::binary(vec![0x01, 0x02, 0x03].into());
+  ///   let mut frame = Frame::binary(vec![0x01, 0x02, 0x03]);
   ///   ws.write_frame(frame).await?;
   ///   Ok(())
   /// }
   /// ```
   pub async fn write_frame(
     &mut self,
-    mut frame: Frame<'f>,
+    mut frame: Frame,
   ) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
   where
     S: AsyncReadExt + AsyncWriteExt + Unpin,
   {
+    // A try_write didn't send the whole frame.
+    if let Some(partial) = self.partial_write.take() {
+      self.stream.write_all(&partial).await?;
+      return Ok(());
+    }
+
     if self.role == Role::Client && self.auto_apply_mask {
       frame.mask();
     }
@@ -308,6 +320,23 @@ impl<'f, S> WebSocket<S> {
     }
 
     Ok(())
+  }
+
+  pub fn try_write_frame(
+    &mut self,
+    mut frame: Frame,
+    cb: impl FnOnce(&mut S, &[u8]) -> std::io::Result<usize>,
+  ) -> bool {
+    debug_assert!(self.partial_write.is_none()); // There should be no partial write in progress
+
+    let text = frame.write(&mut self.write_buffer);
+    let written = cb(&mut self.stream, text).unwrap_or(0);
+    // Not the most optimal approach, but this is the slow path anyway.
+    if written < text.len() {
+      self.partial_write = Some(text[written..].to_vec());
+    }
+
+    self.partial_write.is_none()
   }
 
   /// Reads a frame from the stream.
@@ -337,7 +366,7 @@ impl<'f, S> WebSocket<S> {
   /// ```
   pub async fn read_frame(
     &mut self,
-  ) -> Result<Frame<'f>, Box<dyn std::error::Error + Send + Sync>>
+  ) -> Result<Frame, Box<dyn std::error::Error + Send + Sync>>
   where
     S: AsyncReadExt + AsyncWriteExt + Unpin,
   {
@@ -399,7 +428,7 @@ impl<'f, S> WebSocket<S> {
 
   async fn parse_frame_header(
     &mut self,
-  ) -> Result<Frame<'f>, Box<dyn std::error::Error + Send + Sync>>
+  ) -> Result<Frame, Box<dyn std::error::Error + Send + Sync>>
   where
     S: AsyncReadExt + AsyncWriteExt + Unpin,
   {
@@ -412,15 +441,17 @@ impl<'f, S> WebSocket<S> {
         n
       }};
     }
-    let mut head = [0; 2 + 4 + 100];
+    let head = &mut self.read_buffer;
 
-    let mut nread = 0;
+    let mut nread = self.nread.unwrap_or(0);
+    // if let Some(buffer) = self.read_buffer.take() {
+    //   head[..buffer.len()].copy_from_slice(&buffer);
+    //   nread = buffer.len();
+    // }
 
-    if let Some(buffer) = self.read_buffer.take() {
-      head[..buffer.len()].copy_from_slice(&buffer);
-      nread = buffer.len();
+    if nread == 0 {
+      head.resize(106, 0);
     }
-
     while nread < 2 {
       nread += eof!(self.stream.read(&mut head[nread..]).await?);
     }
@@ -486,27 +517,26 @@ impl<'f, S> WebSocket<S> {
 
     if required > nread {
       // Allocate more space
-      let mut new_head = head.to_vec();
-      new_head.resize(required, 0);
-
-      self.stream.read_exact(&mut new_head[nread..]).await?;
+      head.resize(required, 0);
+      self.stream.read_exact(&mut head[nread..]).await?;
+      self.nread = None;
 
       return Ok(Frame::new(
         fin,
         opcode,
         mask,
-        new_head[required - length..].to_vec().into(),
+        head.split_off(required - length),
       ));
     } else if nread > required {
-      // We read too much
-      self.read_buffer = Some(head[required..nread].to_vec());
+      // We read too much.
+      // [head, payload, extra]
+      self.nread = Some(nread - required);
+      let mut payload = head.split_to(required).split_off(required - length);
+      return Ok(Frame::new(fin, opcode, mask, payload));
     }
 
-    Ok(Frame::new(
-      fin,
-      opcode,
-      mask,
-      head[required - length..required].to_vec().into(),
-    ))
+    let mut payload = head.split_to(required).split_off(required - length);
+    self.nread = None;
+    Ok(Frame::new(fin, opcode, mask, payload))
   }
 }
