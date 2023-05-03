@@ -8,11 +8,6 @@ edition = "2021"
 repository = "https://github.com/denoland/fastwebsockets"
 
 [[example]]
-name = "load_test"
-path = "examples/load_test.rs"
-required-features = ["upgrade"]
-
-[[example]]
 name = "echo_server"
 path = "examples/echo_server.rs"
 required-features = ["upgrade"]
@@ -49,7 +44,6 @@ assert2 = "0.3.4"
 trybuild = "1.0.80"
 # bench
 criterion = "0.4.0"
-futures = "*"
 
 [[bench]]
 name = "unmask"

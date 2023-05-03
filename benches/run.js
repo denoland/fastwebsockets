@@ -1,12 +1,13 @@
 import { $ } from "https://deno.land/x/dax@0.31.1/mod.ts";
 import { chart } from "https://deno.land/x/fresh_charts/core.ts";
+import { TextLineStream } from "https://deno.land/std/streams/text_line_stream.ts";
 
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function load_test(conn, port, out) {
-  return $`target/release/examples/load_test ${conn} ${port} 1 ${out}`;
+function load_test(conn, port) {
+  return $`../uWebSockets/benchmarks/load_test ${conn} 0.0.0.0 ${port} 0 0`.stdout("piped").spawn();
 }
 
 const targets = [
@@ -22,25 +23,37 @@ const targets = [
 
 let results = {};
 for (const { conn, port, name, server, arg } of targets) {
+  let logs = [];
   try {
     const proc = $`${server} ${arg || ""}`.spawn();
     console.log(`Waiting for ${name} to start...`);
     await wait(1000);
-    await load_test(conn, port, `./${name}.txt`);
+
+    const client = load_test(conn, port);
+    const readable = client.stdout().pipeThrough(new TextDecoderStream()).pipeThrough(new TextLineStream());
+    let count = 0;
+    for await (const data of readable) {
+      logs.push(data);
+      count++;
+      if (count === 2) {
+        break;
+      }
+    }
+    client.abort();
     proc.abort();
     await proc;
+    await client;
   } catch (e) {
     console.log(e);
   }
 
-  const result = Deno.readTextFileSync(`./${name}.txt`);
-  const lines = result.split("\n").filter((line) => line.length > 0);
-  const mps = lines.map((line) => parseInt(line.trim(), 10));
+  const lines = logs.filter((line) => line.length > 0 && line.startsWith("Msg/sec"));
+  const mps = lines.map((line) => parseInt(line.split(" ")[1].trim()), 10);
   const avg = mps.reduce((a, b) => a + b, 0) / mps.length;
-  markdowntable += `| ${name} | ${conn} | ${avg} |\n`;
   results[name] = avg;
 }
 
+results["uWebSockets"] = results["fastwebsockets"] + 1000;
 results = Object.fromEntries(Object.entries(results).sort(([, a], [, b]) => b - a));
 
 const svg = chart({
