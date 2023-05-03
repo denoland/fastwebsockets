@@ -71,7 +71,7 @@ pub struct FragmentCollector<S> {
   opcode: OpCode,
 }
 
-impl<S> FragmentCollector<S> {
+impl<'f, S> FragmentCollector<S> {
   /// Creates a new `FragmentCollector` with the provided `WebSocket`.
   pub fn new(ws: WebSocket<S>) -> FragmentCollector<S>
   where
@@ -89,7 +89,7 @@ impl<S> FragmentCollector<S> {
   /// Text frames payload is guaranteed to be valid UTF-8.
   pub async fn read_frame(
     &mut self,
-  ) -> Result<Frame, Box<dyn std::error::Error + Send + Sync>>
+  ) -> Result<Frame<'f>, Box<dyn std::error::Error + Send + Sync>>
   where
     S: AsyncReadExt + AsyncWriteExt + Unpin,
   {
@@ -101,7 +101,12 @@ impl<S> FragmentCollector<S> {
             if self.fragments.is_some() {
               return Err("Invalid fragment".into());
             }
-            return Ok(Frame::new(true, frame.opcode, None, frame.payload));
+            return Ok(Frame::new(
+              true,
+              frame.opcode,
+              None,
+              frame.payload.into(),
+            ));
           } else {
             self.fragments = match frame.opcode {
               OpCode::Text => match utf8::decode(&frame.payload) {
@@ -119,7 +124,7 @@ impl<S> FragmentCollector<S> {
                   return Err("Invalid UTF-8".into());
                 }
               },
-              OpCode::Binary => Some(Fragment::Binary(frame.payload)),
+              OpCode::Binary => Some(Fragment::Binary(frame.payload.into())),
               _ => unreachable!(),
             };
             self.opcode = frame.opcode;
@@ -172,7 +177,7 @@ impl<S> FragmentCollector<S> {
                 true,
                 self.opcode,
                 None,
-                self.fragments.take().unwrap().take_buffer(),
+                self.fragments.take().unwrap().take_buffer().into(),
               ));
             }
           }
@@ -183,7 +188,7 @@ impl<S> FragmentCollector<S> {
                 true,
                 self.opcode,
                 None,
-                self.fragments.take().unwrap().take_buffer(),
+                self.fragments.take().unwrap().take_buffer().into(),
               ));
             }
           }
@@ -196,7 +201,7 @@ impl<S> FragmentCollector<S> {
   /// See `WebSocket::write_frame`.
   pub async fn write_frame(
     &mut self,
-    frame: Frame,
+    frame: Frame<'f>,
   ) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
   where
     S: AsyncReadExt + AsyncWriteExt + Unpin,

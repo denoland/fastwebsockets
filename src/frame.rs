@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::borrow::Cow;
+
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
 
@@ -53,7 +55,7 @@ macro_rules! repr_u8 {
 }
 
 /// Represents a WebSocket frame.
-pub struct Frame {
+pub struct Frame<'f> {
   /// Indicates if this is the final frame in a message.
   pub fin: bool,
   /// The opcode of the frame.
@@ -61,18 +63,18 @@ pub struct Frame {
   /// The masking key of the frame, if any.
   mask: Option<[u8; 4]>,
   /// The payload of the frame.
-  pub payload: Vec<u8>,
+  pub payload: Cow<'f, [u8]>,
 }
 
 const MAX_HEAD_SIZE: usize = 16;
 
-impl Frame {
+impl<'f> Frame<'f> {
   /// Creates a new WebSocket `Frame`.
   pub fn new(
     fin: bool,
     opcode: OpCode,
     mask: Option<[u8; 4]>,
-    payload: Vec<u8>,
+    payload: Cow<'f, [u8]>,
   ) -> Self {
     Self {
       fin,
@@ -87,7 +89,7 @@ impl Frame {
   /// This is a convenience method for `Frame::new(true, OpCode::Text, None, payload)`.
   ///
   /// This method does not check if the payload is valid UTF-8.
-  pub fn text(payload: Vec<u8>) -> Self {
+  pub fn text(payload: Cow<'f, [u8]>) -> Self {
     Self {
       fin: true,
       opcode: OpCode::Text,
@@ -99,7 +101,7 @@ impl Frame {
   /// Create a new WebSocket binary `Frame`.
   ///
   /// This is a convenience method for `Frame::new(true, OpCode::Binary, None, payload)`.
-  pub fn binary(payload: Vec<u8>) -> Self {
+  pub fn binary(payload: Cow<'f, [u8]>) -> Self {
     Self {
       fin: true,
       opcode: OpCode::Binary,
@@ -122,7 +124,7 @@ impl Frame {
       fin: true,
       opcode: OpCode::Close,
       mask: None,
-      payload,
+      payload: payload.into(),
     }
   }
 
@@ -131,7 +133,7 @@ impl Frame {
   /// This is a convenience method for `Frame::new(true, OpCode::Close, None, payload)`.
   ///
   /// This method does not check if `payload` is valid Close frame payload.
-  pub fn close_raw(payload: Vec<u8>) -> Self {
+  pub fn close_raw(payload: Cow<'f, [u8]>) -> Self {
     Self {
       fin: true,
       opcode: OpCode::Close,
@@ -143,7 +145,7 @@ impl Frame {
   /// Create a new WebSocket pong `Frame`.
   ///
   /// This is a convenience method for `Frame::new(true, OpCode::Pong, None, payload)`.
-  pub fn pong(payload: Vec<u8>) -> Self {
+  pub fn pong(payload: Cow<'f, [u8]>) -> Self {
     Self {
       fin: true,
       opcode: OpCode::Pong,
@@ -163,10 +165,10 @@ impl Frame {
 
   pub fn mask(&mut self) {
     if let Some(mask) = self.mask {
-      crate::mask::unmask(&mut self.payload, mask);
+      crate::mask::unmask(self.payload.to_mut(), mask);
     } else {
       let mask: [u8; 4] = rand::random();
-      crate::mask::unmask(&mut self.payload, mask);
+      crate::mask::unmask(self.payload.to_mut(), mask);
       self.mask = Some(mask);
     }
   }
@@ -176,7 +178,7 @@ impl Frame {
   /// Note: By default, the frame payload is unmasked by `WebSocket::read_frame`.
   pub fn unmask(&mut self) {
     if let Some(mask) = self.mask {
-      crate::mask::unmask(&mut self.payload, mask);
+      crate::mask::unmask(self.payload.to_mut(), mask);
     }
   }
 

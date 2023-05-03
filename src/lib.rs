@@ -189,7 +189,7 @@ pub struct WebSocket<S> {
   role: Role,
 }
 
-impl<S> WebSocket<S> {
+impl<'f, S> WebSocket<S> {
   /// Creates a new `WebSocket` from a stream that has already completed the WebSocket handshake.
   ///
   /// Use the `upgrade` feature to handle server upgrades and client handshakes.
@@ -280,14 +280,14 @@ impl<S> WebSocket<S> {
   /// async fn send(
   ///   ws: &mut WebSocket<TcpStream>
   /// ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-  ///   let mut frame = Frame::binary(vec![0x01, 0x02, 0x03]);
+  ///   let mut frame = Frame::binary(vec![0x01, 0x02, 0x03].into());
   ///   ws.write_frame(frame).await?;
   ///   Ok(())
   /// }
   /// ```
   pub async fn write_frame(
     &mut self,
-    mut frame: Frame,
+    mut frame: Frame<'f>,
   ) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
   where
     S: AsyncReadExt + AsyncWriteExt + Unpin,
@@ -337,7 +337,7 @@ impl<S> WebSocket<S> {
   /// ```
   pub async fn read_frame(
     &mut self,
-  ) -> Result<Frame, Box<dyn std::error::Error + Send + Sync>>
+  ) -> Result<Frame<'f>, Box<dyn std::error::Error + Send + Sync>>
   where
     S: AsyncReadExt + AsyncWriteExt + Unpin,
   {
@@ -399,7 +399,7 @@ impl<S> WebSocket<S> {
 
   async fn parse_frame_header(
     &mut self,
-  ) -> Result<Frame, Box<dyn std::error::Error + Send + Sync>>
+  ) -> Result<Frame<'f>, Box<dyn std::error::Error + Send + Sync>>
   where
     S: AsyncReadExt + AsyncWriteExt + Unpin,
   {
@@ -495,7 +495,7 @@ impl<S> WebSocket<S> {
         fin,
         opcode,
         mask,
-        new_head[required - length..].to_vec(),
+        new_head[required - length..].to_vec().into(),
       ));
     } else if nread > required {
       // We read too much
@@ -506,7 +506,7 @@ impl<S> WebSocket<S> {
       fin,
       opcode,
       mask,
-      head[required - length..required].to_vec(),
+      head[required - length..required].to_vec().into(),
     ))
   }
 }
