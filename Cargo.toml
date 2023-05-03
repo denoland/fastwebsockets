@@ -5,6 +5,7 @@ version = "0.4.0"
 authors = ["Divy Srivastava <dj.srivastava23@gmail.com>"]
 license = "Apache-2.0"
 edition = "2021"
+repository = "https://github.com/denoland/fastwebsockets"
 
 [[example]]
 name = "echo_server"
