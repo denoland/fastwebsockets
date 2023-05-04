@@ -23,28 +23,34 @@ fn unmask_easy(payload: &mut [u8], mask: [u8; 4]) {
 #[inline]
 fn unmask_x86_64(payload: &mut [u8], mask: [u8; 4]) {
   #[inline]
-  fn sse42(payload: &mut [u8], mask: [u8; 4]) {
+  fn sse2(payload: &mut [u8], mask: [u8; 4]) {
+    const ALIGNMENT: usize = 16;
     unsafe {
       use std::arch::x86_64::*;
+      let len = payload.len();
+
+      let start = len - len % ALIGNMENT;
 
       let mask_m = _mm_loadu_si128(mask.as_ptr() as *const _);
-      let mut i = 0;
-      while i + 16 <= payload.len() {
-        let mut data = _mm_loadu_si128(payload.as_ptr().add(i) as *const _);
-        data = _mm_xor_si128(data, mask_m);
-        _mm_storeu_si128(payload.as_mut_ptr().add(i) as *mut _, data);
-        i += 16;
+
+      for index in (0..start).step_by(ALIGNMENT) {
+        let ptr = payload.as_mut_ptr().add(index);
+        let mut v = _mm_loadu_si128(ptr as *const _);
+        v = _mm_xor_si128(v, mask_m);
+        _mm_storeu_si128(ptr as *mut _, v);
       }
 
-      unmask_easy(&mut payload[i..], mask);
+      if len != start {
+        unmask_easy(&mut payload[start..], mask);
+      }
     }
   }
-  #[cfg(target_feature = "sse4.2")]
+  #[cfg(target_feature = "sse2")]
   {
-    return sse42(payload, mask);
+    return sse2(payload, mask);
   }
 
-  #[cfg(not(target_feature = "sse4.2"))]
+  #[cfg(not(target_feature = "sse2"))]
   {
     use core::mem;
     use std::sync::atomic::AtomicPtr;
@@ -57,7 +63,7 @@ fn unmask_x86_64(payload: &mut [u8], mask: [u8; 4]) {
       let fun = if std::is_x86_feature_detected!("sse4.2") {
         sse42
       } else {
-        unmask_easy
+        unmask_fallback
       };
       FN.store(fun as FnRaw, Ordering::Relaxed);
       (fun)(input, mask);
@@ -66,7 +72,7 @@ fn unmask_x86_64(payload: &mut [u8], mask: [u8; 4]) {
     static FN: AtomicPtr<()> = AtomicPtr::new(get_impl as FnRaw);
 
     if payload.len() < 16 {
-      return unmask_easy(payload, mask);
+      return unmask_fallback(payload, mask);
     }
 
     let fun = FN.load(Ordering::Relaxed);
