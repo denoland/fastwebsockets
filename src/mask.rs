@@ -22,7 +22,7 @@ fn unmask_easy(payload: &mut [u8], mask: [u8; 4]) {
 
 #[cfg(all(target_arch = "x86_64", feature = "simd"))]
 #[inline]
-pub fn unmask_avx2(payload: &mut [u8], mask: [u8; 4]) {
+pub fn unmask_x86_64(payload: &mut [u8], mask: [u8; 4]) {
   use core::mem;
   use std::sync::atomic::AtomicPtr;
   use std::sync::atomic::Ordering;
@@ -30,16 +30,14 @@ pub fn unmask_avx2(payload: &mut [u8], mask: [u8; 4]) {
   type FnRaw = *mut ();
   type FnImpl = unsafe fn(&mut [u8], [u8; 4]);
 
-  unsafe fn get_impl(input: &[u8]) {
-    let fun = if std::is_x86_feature_detected!("avx2") {
-      avx2
-    } else if std::is_x86_feature_detected!("sse4.2") {
+  unsafe fn get_impl(input: &mut [u8], mask: [u8; 4]) {
+    let fun = if std::is_x86_feature_detected!("sse4.2") {
       sse42
     } else {
       unmask_easy
     };
     FN.store(fun as FnRaw, Ordering::Relaxed);
-    (fun)(input)
+    (fun)(input, mask);
   }
 
   #[inline]
@@ -60,24 +58,6 @@ pub fn unmask_avx2(payload: &mut [u8], mask: [u8; 4]) {
     }
   }
 
-  #[inline]
-  fn avx2(payload: &mut [u8], mask: [u8; 4]) {
-    unsafe {
-      use std::arch::x86_64::*;
-
-      let mask_m = _mm256_loadu_si256(mask.as_ptr() as *const _);
-      let mut i = 0;
-      while i + 32 <= payload.len() {
-        let mut data = _mm256_loadu_si256(payload.as_ptr().add(i) as *const _);
-        data = _mm256_xor_si256(data, mask_m);
-        _mm256_storeu_si256(payload.as_mut_ptr().add(i) as *mut _, data);
-        i += 32;
-      }
-
-      sse42(&mut payload[i..], mask);
-    }
-  }
-
   static FN: AtomicPtr<()> = AtomicPtr::new(get_impl as FnRaw);
 
   if payload.len() < 16 {
@@ -92,7 +72,7 @@ pub fn unmask_avx2(payload: &mut [u8], mask: [u8; 4]) {
 #[inline]
 pub fn unmask(payload: &mut [u8], mask: [u8; 4]) {
   #[cfg(all(target_arch = "x86_64", feature = "simd"))]
-  return unmask_avx2(payload, mask);
+  return unmask_x86_64(payload, mask);
 
   #[cfg(all(target_arch = "aarch64", feature = "simd"))]
   unsafe {
