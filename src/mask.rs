@@ -20,11 +20,29 @@ fn unmask_easy(payload: &mut [u8], mask: [u8; 4]) {
   }
 }
 
+#[cfg(all(target_arch = "x86_64", feature = "simd"))]
+#[inline]
+pub fn unmask_avx2(payload: &mut [u8], mask: [u8; 4]) {
+  unsafe {
+    use std::arch::x86_64::*;
+
+    let mask = _mm_loadu_si128(mask.as_ptr() as *const _);
+    let mut i = 0;
+    while i + 16 <= payload.len() {
+      let mut data = _mm_loadu_si128(payload.as_ptr().add(i) as *const _);
+      data = _mm_xor_si128(data, mask);
+      _mm_storeu_si128(payload.as_mut_ptr().add(i) as *mut _, data);
+      i += 16;
+    }
+    unmask_easy(&mut payload[i..], mask.as_ref().into());
+  }
+}
+
 /// Unmask a payload using the given 4-byte mask.
 #[inline]
 pub fn unmask(payload: &mut [u8], mask: [u8; 4]) {
-  #[cfg(not(all(target_arch = "aarch64", feature = "simd")))]
-  return unmask_easy(payload, mask);
+  #[cfg(all(target_arch = "x86_64", feature = "simd"))]
+  return unmask_avx2(payload, mask);
 
   #[cfg(all(target_arch = "aarch64", feature = "simd"))]
   unsafe {
@@ -36,6 +54,13 @@ pub fn unmask(payload: &mut [u8], mask: [u8; 4]) {
 
     unmask(payload.as_mut_ptr(), mask.as_ptr(), payload.len());
   }
+
+  #[cfg(not(all(
+    target_arch = "aarch64",
+    target_arch = "x86_64",
+    feature = "simd"
+  )))]
+  return unmask_easy(payload, mask);
 }
 
 #[cfg(test)]
