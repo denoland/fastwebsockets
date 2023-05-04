@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#[cfg(not(all(target_arch = "aarch64", feature = "simd")))]
 #[inline]
 fn unmask_easy(payload: &mut [u8], mask: [u8; 4]) {
   for i in 0..payload.len() {
@@ -22,7 +21,7 @@ fn unmask_easy(payload: &mut [u8], mask: [u8; 4]) {
 
 #[cfg(all(target_arch = "x86_64", feature = "simd"))]
 #[inline]
-pub fn unmask_x86_64(payload: &mut [u8], mask: [u8; 4]) {
+fn unmask_x86_64(payload: &mut [u8], mask: [u8; 4]) {
   #[inline]
   fn sse42(payload: &mut [u8], mask: [u8; 4]) {
     unsafe {
@@ -75,29 +74,38 @@ pub fn unmask_x86_64(payload: &mut [u8], mask: [u8; 4]) {
   }
 }
 
+// Faster version of `unmask_easy()` which operates on 4-byte blocks.
+// https://github.com/snapview/tungstenite-rs/blob/e5efe537b87a6705467043fe44bb220ddf7c1ce8/src/protocol/frame/mask.rs#L23
+#[inline]
+fn unmask_fallback(buf: &mut [u8], mask: [u8; 4]) {
+  let mask_u32 = u32::from_ne_bytes(mask);
+
+  let (prefix, words, suffix) = unsafe { buf.align_to_mut::<u32>() };
+  unmask_easy(prefix, mask);
+  let head = prefix.len() & 3;
+  let mask_u32 = if head > 0 {
+    if cfg!(target_endian = "big") {
+      mask_u32.rotate_left(8 * head as u32)
+    } else {
+      mask_u32.rotate_right(8 * head as u32)
+    }
+  } else {
+    mask_u32
+  };
+  for word in words.iter_mut() {
+    *word ^= mask_u32;
+  }
+  unmask_easy(suffix, mask_u32.to_ne_bytes());
+}
+
 /// Unmask a payload using the given 4-byte mask.
 #[inline]
 pub fn unmask(payload: &mut [u8], mask: [u8; 4]) {
   #[cfg(all(target_arch = "x86_64", feature = "simd"))]
   return unmask_x86_64(payload, mask);
 
-  #[cfg(all(target_arch = "aarch64", feature = "simd"))]
-  unsafe {
-    // ~10% faster on small payloads (1024)
-    // ~30% faster on largest default payload (64 << 20)
-    extern "C" {
-      fn unmask(payload: *mut u8, mask: *const u8, len: usize);
-    }
-
-    unmask(payload.as_mut_ptr(), mask.as_ptr(), payload.len());
-  }
-
-  #[cfg(not(all(
-    target_arch = "aarch64",
-    target_arch = "x86_64",
-    feature = "simd"
-  )))]
-  return unmask_easy(payload, mask);
+  #[cfg(not(all(target_arch = "x86_64", feature = "simd")))]
+  return unmask_fallback(payload, mask);
 }
 
 #[cfg(test)]
