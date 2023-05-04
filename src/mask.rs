@@ -43,35 +43,39 @@ pub fn unmask_avx2(payload: &mut [u8], mask: [u8; 4]) {
   }
 
   #[inline]
-  unsafe fn sse42(payload: &mut [u8], mask: [u8; 4]) {
-    use std::arch::x86_64::*;
+  fn sse42(payload: &mut [u8], mask: [u8; 4]) {
+    unsafe {
+      use std::arch::x86_64::*;
 
-    let mask_m = _mm_loadu_si128(mask.as_ptr() as *const _);
-    let mut i = 0;
-    while i + 16 <= payload.len() {
-      let mut data = _mm_loadu_si128(payload.as_ptr().add(i) as *const _);
-      data = _mm_xor_si128(data, mask_m);
-      _mm_storeu_si128(payload.as_mut_ptr().add(i) as *mut _, data);
-      i += 16;
+      let mask_m = _mm_loadu_si128(mask.as_ptr() as *const _);
+      let mut i = 0;
+      while i + 16 <= payload.len() {
+        let mut data = _mm_loadu_si128(payload.as_ptr().add(i) as *const _);
+        data = _mm_xor_si128(data, mask_m);
+        _mm_storeu_si128(payload.as_mut_ptr().add(i) as *mut _, data);
+        i += 16;
+      }
+
+      unmask_easy(&mut payload[i..], mask);
     }
-
-    unmask_easy(&mut payload[i..], mask);
   }
 
   #[inline]
-  unsafe fn avx2(payload: &mut [u8], mask: [u8; 4]) {
-    use std::arch::x86_64::*;
+  fn avx2(payload: &mut [u8], mask: [u8; 4]) {
+    unsafe {
+      use std::arch::x86_64::*;
 
-    let mask_m = _mm256_loadu_si256(mask.as_ptr() as *const _);
-    let mut i = 0;
-    while i + 32 <= payload.len() {
-      let mut data = _mm256_loadu_si256(payload.as_ptr().add(i) as *const _);
-      data = _mm256_xor_si256(data, mask_m);
-      _mm256_storeu_si256(payload.as_mut_ptr().add(i) as *mut _, data);
-      i += 32;
+      let mask_m = _mm256_loadu_si256(mask.as_ptr() as *const _);
+      let mut i = 0;
+      while i + 32 <= payload.len() {
+        let mut data = _mm256_loadu_si256(payload.as_ptr().add(i) as *const _);
+        data = _mm256_xor_si256(data, mask_m);
+        _mm256_storeu_si256(payload.as_mut_ptr().add(i) as *mut _, data);
+        i += 32;
+      }
+
+      sse42(&mut payload[i..], mask);
     }
-
-    sse42(&mut payload[i..], mask);
   }
 
   static FN: AtomicPtr<()> = AtomicPtr::new(get_impl as FnRaw);
