@@ -1,8 +1,10 @@
 ### Plaintext, echo WebSocket server benchmark
 
-fastwebsockets v/s popular WebSocket Rust crates.
+![](./100-20-chart.svg)
 
-![](./chart.svg)
+![](./10-1024-chart.svg)
+
+![](./10-16584-chart.svg)
 
 ```
 Linux divy 5.19.0-1022-gcp #24~22.04.1-Ubuntu SMP x86_64 GNU/Linux
