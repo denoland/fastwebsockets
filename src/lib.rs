@@ -412,7 +412,14 @@ impl<'f, S> WebSocket<S> {
         n
       }};
     }
-    let mut head = [0; 2 + 4 + 100];
+    use std::mem::MaybeUninit;
+    // let mut head = [0; 512];
+    // Faster creation using `MaybeUninit`
+    let mut head = unsafe {
+      let mut head: MaybeUninit<[u8; 106]> = MaybeUninit::uninit();
+      //   std::ptr::write_bytes(head.as_mut_ptr(), 0, 512);
+      head.assume_init()
+    };
 
     let mut nread = 0;
 
