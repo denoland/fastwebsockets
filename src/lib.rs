@@ -220,7 +220,7 @@ impl<'f, S> WebSocket<S> {
       stream,
       write_buffer: Vec::with_capacity(2),
       read_buffer: vec![0; RECV_SIZE],
-      vectored: true,
+      vectored: false,
       auto_close: true,
       auto_pong: true,
       auto_apply_mask: true,
