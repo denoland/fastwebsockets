@@ -26,11 +26,11 @@ pub fn unmask_avx2(payload: &mut [u8], mask: [u8; 4]) {
   unsafe {
     use std::arch::x86_64::*;
 
-    let mask = _mm_loadu_si128(mask.as_ptr() as *const _);
+    let mask_m = _mm_loadu_si128(mask.as_ptr() as *const _);
     let mut i = 0;
     while i + 16 <= payload.len() {
       let mut data = _mm_loadu_si128(payload.as_ptr().add(i) as *const _);
-      data = _mm_xor_si128(data, mask);
+      data = _mm_xor_si128(data, mask_m);
       _mm_storeu_si128(payload.as_mut_ptr().add(i) as *mut _, data);
       i += 16;
     }
