@@ -23,23 +23,6 @@ fn unmask_easy(payload: &mut [u8], mask: [u8; 4]) {
 #[cfg(all(target_arch = "x86_64", feature = "simd"))]
 #[inline]
 pub fn unmask_x86_64(payload: &mut [u8], mask: [u8; 4]) {
-  use core::mem;
-  use std::sync::atomic::AtomicPtr;
-  use std::sync::atomic::Ordering;
-
-  type FnRaw = *mut ();
-  type FnImpl = unsafe fn(&mut [u8], [u8; 4]);
-
-  unsafe fn get_impl(input: &mut [u8], mask: [u8; 4]) {
-    let fun = if std::is_x86_feature_detected!("sse4.2") {
-      sse42
-    } else {
-      unmask_easy
-    };
-    FN.store(fun as FnRaw, Ordering::Relaxed);
-    (fun)(input, mask);
-  }
-
   #[inline]
   fn sse42(payload: &mut [u8], mask: [u8; 4]) {
     unsafe {
@@ -57,15 +40,39 @@ pub fn unmask_x86_64(payload: &mut [u8], mask: [u8; 4]) {
       unmask_easy(&mut payload[i..], mask);
     }
   }
-
-  static FN: AtomicPtr<()> = AtomicPtr::new(get_impl as FnRaw);
-
-  if payload.len() < 16 {
-    return unmask_easy(payload, mask);
+  #[cfg(target_feature = "sse4.2")]
+  {
+    return sse42(payload, mask);
   }
 
-  let fun = FN.load(Ordering::Relaxed);
-  unsafe { mem::transmute::<FnRaw, FnImpl>(fun)(payload, mask) }
+  #[cfg(not(target_feature = "sse4.2"))]
+  {
+    use core::mem;
+    use std::sync::atomic::AtomicPtr;
+    use std::sync::atomic::Ordering;
+
+    type FnRaw = *mut ();
+    type FnImpl = unsafe fn(&mut [u8], [u8; 4]);
+
+    unsafe fn get_impl(input: &mut [u8], mask: [u8; 4]) {
+      let fun = if std::is_x86_feature_detected!("sse4.2") {
+        sse42
+      } else {
+        unmask_easy
+      };
+      FN.store(fun as FnRaw, Ordering::Relaxed);
+      (fun)(input, mask);
+    }
+
+    static FN: AtomicPtr<()> = AtomicPtr::new(get_impl as FnRaw);
+
+    if payload.len() < 16 {
+      return unmask_easy(payload, mask);
+    }
+
+    let fun = FN.load(Ordering::Relaxed);
+    unsafe { mem::transmute::<FnRaw, FnImpl>(fun)(payload, mask) }
+  }
 }
 
 /// Unmask a payload using the given 4-byte mask.
