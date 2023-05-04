@@ -46,7 +46,7 @@ const cases = [
   {
     conn: 10,
     bytes: 16 * 1024,
-  }
+  },
 ];
 
 for (const { conn, bytes } of cases) {
@@ -58,14 +58,14 @@ for (const { conn, bytes } of cases) {
       console.log(`Waiting for ${name} to start...`);
       await wait(1000);
 
-      const client = load_test(conn, port, bytes);
+      const client = load_test(conn, port, bytes == 20 ? "" : bytes);
       const readable = client.stdout().pipeThrough(new TextDecoderStream())
         .pipeThrough(new TextLineStream());
       let count = 0;
       for await (const data of readable) {
         logs.push(data);
         count++;
-        if (count === 3) {
+        if (count === 5) {
           break;
         }
       }
