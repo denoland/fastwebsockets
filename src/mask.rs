@@ -34,7 +34,7 @@ pub fn unmask_avx2(payload: &mut [u8], mask: [u8; 4]) {
       _mm_storeu_si128(payload.as_mut_ptr().add(i) as *mut _, data);
       i += 16;
     }
-    unmask_easy(&mut payload[i..], mask.as_ref().into());
+    unmask_easy(&mut payload[i..], mask);
   }
 }
 
