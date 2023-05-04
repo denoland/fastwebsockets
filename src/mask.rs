@@ -19,66 +19,82 @@ fn unmask_easy(payload: &mut [u8], mask: [u8; 4]) {
   }
 }
 
-#[cfg(all(target_arch = "x86_64", feature = "simd"))]
-#[inline]
-fn unmask_x86_64(payload: &mut [u8], mask: [u8; 4]) {
-  #[inline]
-  fn sse2(payload: &mut [u8], mask: [u8; 4]) {
-    const ALIGNMENT: usize = 16;
-    unsafe {
-      use std::arch::x86_64::*;
-      let len = payload.len();
-
-      let start = len - len % ALIGNMENT;
-
-      let mask_m = _mm_loadu_si128(mask.as_ptr() as *const _);
-
-      for index in (0..start).step_by(ALIGNMENT) {
-        let ptr = payload.as_mut_ptr().add(index);
-        let mut v = _mm_loadu_si128(ptr as *const _);
-        v = _mm_xor_si128(v, mask_m);
-        _mm_storeu_si128(ptr as *mut _, v);
-      }
-
-      if len != start {
-        unmask_easy(&mut payload[start..], mask);
-      }
-    }
-  }
-  #[cfg(target_feature = "sse2")]
-  {
-    return sse2(payload, mask);
-  }
-
-  #[cfg(not(target_feature = "sse2"))]
-  {
-    use core::mem;
-    use std::sync::atomic::AtomicPtr;
-    use std::sync::atomic::Ordering;
-
-    type FnRaw = *mut ();
-    type FnImpl = unsafe fn(&mut [u8], [u8; 4]);
-
-    unsafe fn get_impl(input: &mut [u8], mask: [u8; 4]) {
-      let fun = if std::is_x86_feature_detected!("sse4.2") {
-        sse42
-      } else {
-        unmask_fallback
-      };
-      FN.store(fun as FnRaw, Ordering::Relaxed);
-      (fun)(input, mask);
-    }
-
-    static FN: AtomicPtr<()> = AtomicPtr::new(get_impl as FnRaw);
-
-    if payload.len() < 16 {
-      return unmask_fallback(payload, mask);
-    }
-
-    let fun = FN.load(Ordering::Relaxed);
-    unsafe { mem::transmute::<FnRaw, FnImpl>(fun)(payload, mask) }
-  }
-}
+// TODO(@littledivy): Compiler does a good job at auto-vectorizing `unmask_fallback` with
+// -C target-cpu=native. Below is a manual implementation.
+//
+// #[cfg(all(target_arch = "x86_64", feature = "simd"))]
+// #[inline]
+// fn unmask_x86_64(payload: &mut [u8], mask: [u8; 4]) {
+//   #[inline]
+//   fn sse2(payload: &mut [u8], mask: [u8; 4]) {
+//     const ALIGNMENT: usize = 16;
+//     unsafe {
+//       use std::arch::x86_64::*;
+//
+//       let len = payload.len();
+//       if len < ALIGNMENT {
+//         return unmask_fallback(payload, mask);
+//       }
+//
+//       let start = len - len % ALIGNMENT;
+//
+//       let mut aligned_mask = [0; ALIGNMENT];
+//
+//       for j in (0..ALIGNMENT).step_by(4) {
+//         aligned_mask[j] = mask[j % 4];
+//         aligned_mask[j + 1] = mask[(j % 4) + 1];
+//         aligned_mask[j + 2] = mask[(j % 4) + 2];
+//         aligned_mask[j + 3] = mask[(j % 4) + 3];
+//       }
+//
+//       let mask_m = _mm_loadu_si128(aligned_mask.as_ptr() as *const _);
+//
+//       for index in (0..start).step_by(ALIGNMENT) {
+//         let ptr = payload.as_mut_ptr().add(index);
+//         let mut v = _mm_loadu_si128(ptr as *const _);
+//         v = _mm_xor_si128(v, mask_m);
+//         _mm_storeu_si128(ptr as *mut _, v);
+//       }
+//
+//       if len != start {
+//         unmask_fallback(&mut payload[start..], mask);
+//       }
+//     }
+//   }
+//   #[cfg(target_feature = "sse2")]
+//   {
+//     return sse2(payload, mask);
+//   }
+//
+//   #[cfg(not(target_feature = "sse2"))]
+//   {
+//     use core::mem;
+//     use std::sync::atomic::AtomicPtr;
+//     use std::sync::atomic::Ordering;
+//
+//     type FnRaw = *mut ();
+//     type FnImpl = unsafe fn(&mut [u8], [u8; 4]);
+//
+//     unsafe fn get_impl(input: &mut [u8], mask: [u8; 4]) {
+//       let fun = if std::is_x86_feature_detected!("sse2") {
+//         sse2
+//       } else {
+//         unmask_fallback
+//       };
+//       FN.store(fun as FnRaw, Ordering::Relaxed);
+//       (fun)(input, mask);
+//     }
+//
+//     static FN: AtomicPtr<()> = AtomicPtr::new(get_impl as FnRaw);
+//
+//     if payload.len() < 16 {
+//       return unmask_fallback(payload, mask);
+//     }
+//
+//     let fun = FN.load(Ordering::Relaxed);
+//     unsafe { mem::transmute::<FnRaw, FnImpl>(fun)(payload, mask) }
+//   }
+// }
 
 // Faster version of `unmask_easy()` which operates on 4-byte blocks.
 // https://github.com/snapview/tungstenite-rs/blob/e5efe537b87a6705467043fe44bb220ddf7c1ce8/src/protocol/frame/mask.rs#L23
@@ -107,10 +123,6 @@ fn unmask_fallback(buf: &mut [u8], mask: [u8; 4]) {
 /// Unmask a payload using the given 4-byte mask.
 #[inline]
 pub fn unmask(payload: &mut [u8], mask: [u8; 4]) {
-  #[cfg(all(target_arch = "x86_64", feature = "simd"))]
-  return unmask_x86_64(payload, mask);
-
-  #[cfg(not(all(target_arch = "x86_64", feature = "simd")))]
   return unmask_fallback(payload, mask);
 }
 
