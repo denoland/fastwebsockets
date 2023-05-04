@@ -175,11 +175,14 @@ pub enum Role {
   Client,
 }
 
+// 512 KiB
+const RECV_SIZE: usize = 524288;
+
 /// WebSocket protocol implementation over an async stream.
 pub struct WebSocket<S> {
   stream: S,
   write_buffer: Vec<u8>,
-  read_buffer: Option<Vec<u8>>,
+  read_buffer: Vec<u8>,
   vectored: bool,
   auto_close: bool,
   auto_pong: bool,
@@ -187,6 +190,7 @@ pub struct WebSocket<S> {
   auto_apply_mask: bool,
   closed: bool,
   role: Role,
+  nread: Option<usize>,
 }
 
 impl<'f, S> WebSocket<S> {
@@ -215,12 +219,13 @@ impl<'f, S> WebSocket<S> {
     Self {
       stream,
       write_buffer: Vec::with_capacity(2),
-      read_buffer: None,
+      read_buffer: vec![0; RECV_SIZE],
       vectored: true,
       auto_close: true,
       auto_pong: true,
       auto_apply_mask: true,
       max_message_size: 64 << 20,
+      nread: None,
       closed: false,
       role,
     }
@@ -412,21 +417,19 @@ impl<'f, S> WebSocket<S> {
         n
       }};
     }
-    use std::mem::MaybeUninit;
-    // let mut head = [0; 512];
-    // Faster creation using `MaybeUninit`
-    let mut head = unsafe {
-      let mut head: MaybeUninit<[u8; 106]> = MaybeUninit::uninit();
-      //   std::ptr::write_bytes(head.as_mut_ptr(), 0, 512);
-      head.assume_init()
-    };
 
-    let mut nread = 0;
+    // use std::mem::MaybeUninit;
+    // // let mut head = [0; 512];
+    // // Faster creation using `MaybeUninit`
+    // let mut head = unsafe {
+    //   let mut head: MaybeUninit<[u8; 106]> = MaybeUninit::uninit();
+    //   //   std::ptr::write_bytes(head.as_mut_ptr(), 0, 512);
+    //   head.assume_init()
+    // };
 
-    if let Some(buffer) = self.read_buffer.take() {
-      head[..buffer.len()].copy_from_slice(&buffer);
-      nread = buffer.len();
-    }
+    let mut nread = self.nread.unwrap_or(0);
+
+    let head = &mut self.read_buffer;
 
     while nread < 2 {
       nread += eof!(self.stream.read(&mut head[nread..]).await?);
@@ -497,7 +500,7 @@ impl<'f, S> WebSocket<S> {
       new_head.resize(required, 0);
 
       self.stream.read_exact(&mut new_head[nread..]).await?;
-
+      self.nread = None;
       return Ok(Frame::new(
         fin,
         opcode,
@@ -505,10 +508,13 @@ impl<'f, S> WebSocket<S> {
         new_head[required - length..].to_vec().into(),
       ));
     } else if nread > required {
+      self.nread = Some(nread - required);
       // We read too much
-      self.read_buffer = Some(head[required..nread].to_vec());
+      // self.read_buffer = Some(head[required..nread].to_vec());
+      head.copy_within(required..nread, 0);
     }
 
+    self.nread = None;
     Ok(Frame::new(
       fin,
       opcode,
