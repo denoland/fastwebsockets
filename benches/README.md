@@ -1,10 +1,10 @@
 ### Plaintext, echo WebSocket server benchmark
 
+![](./10-16384-chart.svg)
+
 ![](./100-20-chart.svg)
 
 ![](./10-1024-chart.svg)
-
-![](./10-16384-chart.svg)
 
 ```
 Linux divy 5.19.0-1022-gcp #24~22.04.1-Ubuntu SMP x86_64 GNU/Linux
