@@ -191,6 +191,7 @@ pub struct WebSocket<S> {
   closed: bool,
   role: Role,
   nread: Option<usize>,
+  read_offset: usize,
 }
 
 impl<'f, S> WebSocket<S> {
@@ -228,6 +229,7 @@ impl<'f, S> WebSocket<S> {
       nread: None,
       closed: false,
       role,
+      read_offset: 0,
     }
   }
 
@@ -419,7 +421,7 @@ impl<'f, S> WebSocket<S> {
     }
 
     let mut nread = self.nread.unwrap_or(0);
-    let head = &mut self.read_buffer;
+    let head = &mut self.read_buffer[self.read_offset..];
 
     while nread < 2 {
       nread += eof!(self.stream.read(&mut head[nread..]).await?);
@@ -508,7 +510,7 @@ impl<'f, S> WebSocket<S> {
 
     if nread > required {
       // We read too much
-      head.copy_within(required..nread, 0);
+      self.read_offset += required;
       self.nread = Some(nread - required);
     }
 
