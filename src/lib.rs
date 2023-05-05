@@ -418,17 +418,7 @@ impl<'f, S> WebSocket<S> {
       }};
     }
 
-    // use std::mem::MaybeUninit;
-    // // let mut head = [0; 512];
-    // // Faster creation using `MaybeUninit`
-    // let mut head = unsafe {
-    //   let mut head: MaybeUninit<[u8; 106]> = MaybeUninit::uninit();
-    //   //   std::ptr::write_bytes(head.as_mut_ptr(), 0, 512);
-    //   head.assume_init()
-    // };
-
     let mut nread = self.nread.unwrap_or(0);
-
     let head = &mut self.read_buffer;
 
     while nread < 2 {
@@ -494,32 +484,34 @@ impl<'f, S> WebSocket<S> {
 
     let required = 2 + extra + mask.map(|_| 4).unwrap_or(0) + length;
 
+    self.nread = None;
     if required > nread {
       // Allocate more space
       let mut new_head = head.to_vec();
       new_head.resize(required, 0);
 
       self.stream.read_exact(&mut new_head[nread..]).await?;
-      self.nread = None;
       return Ok(Frame::new(
         fin,
         opcode,
         mask,
         new_head[required - length..].to_vec().into(),
       ));
-    } else if nread > required {
-      self.nread = Some(nread - required);
-      // We read too much
-      // self.read_buffer = Some(head[required..nread].to_vec());
-      head.copy_within(required..nread, 0);
     }
 
-    self.nread = None;
-    Ok(Frame::new(
+    let frame = Frame::new(
       fin,
       opcode,
       mask,
       head[required - length..required].to_vec().into(),
-    ))
+    );
+
+    if nread > required {
+      // We read too much
+      head.copy_within(required..nread, 0);
+      self.nread = Some(nread - required);
+    }
+
+    Ok(frame)
   }
 }

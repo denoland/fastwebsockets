@@ -98,6 +98,8 @@ fn unmask_easy(payload: &mut [u8], mask: [u8; 4]) {
 
 // Faster version of `unmask_easy()` which operates on 4-byte blocks.
 // https://github.com/snapview/tungstenite-rs/blob/e5efe537b87a6705467043fe44bb220ddf7c1ce8/src/protocol/frame/mask.rs#L23
+//
+// https://godbolt.org/z/EPTYo5jK8
 #[inline]
 fn unmask_fallback(buf: &mut [u8], mask: [u8; 4]) {
   let mask_u32 = u32::from_ne_bytes(mask);
