@@ -21,6 +21,87 @@ use hyper::Request;
 use hyper::Response;
 use tokio::net::TcpListener;
 
+use futures::ready;
+use std::io::{self, Read, Write};
+use std::net::TcpStream;
+use std::pin::Pin;
+use std::task::{Context, Poll};
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+use tokio::io::unix::AsyncFd;
+
+pub struct AsyncTcpStream {
+    inner: AsyncFd<TcpStream>,
+}
+
+impl AsyncTcpStream {
+    pub fn new(tcp: TcpStream) -> io::Result<Self> {
+        tcp.set_nonblocking(true)?;
+        Ok(Self {
+            inner: AsyncFd::with_interest(tcp, tokio::io::Interest::READABLE)?,
+        })
+    }
+}
+
+impl AsyncRead for AsyncTcpStream {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>
+    ) -> Poll<io::Result<()>> {
+        loop {
+            let mut guard = ready!(self.inner.poll_read_ready(cx))?;
+
+            let unfilled = buf.initialize_unfilled();
+            match guard.try_io(|inner| inner.get_ref().read(unfilled)) {
+                Ok(Ok(len)) => {
+                    buf.advance(len);
+                    return Poll::Ready(Ok(()));
+                },
+                Ok(Err(err)) => return Poll::Ready(Err(err)),
+                Err(_would_block) => continue,
+            }
+        }
+    }
+}
+
+impl AsyncWrite for AsyncTcpStream {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8]
+    ) -> Poll<io::Result<usize>> {
+        match self.inner.get_ref().write(buf) {
+            Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => panic!("unexpected WouldBlock"),
+            other => return Poll::Ready(other),
+        };
+
+        loop {
+            let mut guard = ready!(self.inner.poll_write_ready(cx))?;
+
+            match guard.try_io(|inner| inner.get_ref().write(buf)) {
+                Ok(result) => return Poll::Ready(result),
+                Err(_would_block) => continue,
+            }
+        }
+    }
+
+    fn poll_flush(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<io::Result<()>> {
+        // tcp flush is a no-op
+        Poll::Ready(Ok(()))
+    }
+
+    fn poll_shutdown(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<io::Result<()>> {
+        self.inner.get_ref().shutdown(std::net::Shutdown::Write)?;
+        Poll::Ready(Ok(()))
+    }
+}
+
 async fn handle_client(
   fut: upgrade::UpgradeFut,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -53,12 +134,13 @@ async fn server_upgrade(
   Ok(response)
 }
 
-#[tokio::main(flavor = "current_thread")]
-async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+async fn serve() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
   let listener = TcpListener::bind("127.0.0.1:8080").await?;
   println!("Server started, listening on {}", "127.0.0.1:8080");
   loop {
     let (stream, _) = listener.accept().await?;
+    let std_stream = stream.into_std()?;
+    let stream = AsyncTcpStream::new(std_stream)?;
     println!("Client connected");
     tokio::spawn(async move {
       let conn_fut = Http::new()
@@ -69,4 +151,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
       }
     });
   }
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+  tokio::runtime::Builder::new_current_thread()
+    .enable_all()
+    .build()
+    .unwrap()
+    .block_on(serve())
 }
