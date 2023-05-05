@@ -1,2 +1,4 @@
 /target
 *.txt
+*.o
+benches/load_test

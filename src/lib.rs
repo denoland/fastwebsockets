@@ -175,11 +175,14 @@ pub enum Role {
   Client,
 }
 
+// 512 KiB
+const RECV_SIZE: usize = 524288;
+
 /// WebSocket protocol implementation over an async stream.
 pub struct WebSocket<S> {
   stream: S,
   write_buffer: Vec<u8>,
-  read_buffer: Option<Vec<u8>>,
+  read_buffer: Vec<u8>,
   vectored: bool,
   auto_close: bool,
   auto_pong: bool,
@@ -187,6 +190,8 @@ pub struct WebSocket<S> {
   auto_apply_mask: bool,
   closed: bool,
   role: Role,
+  nread: Option<usize>,
+  read_offset: usize,
 }
 
 impl<'f, S> WebSocket<S> {
@@ -215,14 +220,16 @@ impl<'f, S> WebSocket<S> {
     Self {
       stream,
       write_buffer: Vec::with_capacity(2),
-      read_buffer: None,
-      vectored: true,
+      read_buffer: vec![0; RECV_SIZE],
+      vectored: false,
       auto_close: true,
       auto_pong: true,
       auto_apply_mask: true,
       max_message_size: 64 << 20,
+      nread: None,
       closed: false,
       role,
+      read_offset: 0,
     }
   }
 
@@ -412,14 +419,9 @@ impl<'f, S> WebSocket<S> {
         n
       }};
     }
-    let mut head = [0; 2 + 4 + 100];
 
-    let mut nread = 0;
-
-    if let Some(buffer) = self.read_buffer.take() {
-      head[..buffer.len()].copy_from_slice(&buffer);
-      nread = buffer.len();
-    }
+    let mut nread = self.nread.unwrap_or(0);
+    let head = &mut self.read_buffer[self.read_offset..];
 
     while nread < 2 {
       nread += eof!(self.stream.read(&mut head[nread..]).await?);
@@ -484,29 +486,34 @@ impl<'f, S> WebSocket<S> {
 
     let required = 2 + extra + mask.map(|_| 4).unwrap_or(0) + length;
 
+    self.nread = None;
     if required > nread {
       // Allocate more space
       let mut new_head = head.to_vec();
       new_head.resize(required, 0);
 
       self.stream.read_exact(&mut new_head[nread..]).await?;
-
       return Ok(Frame::new(
         fin,
         opcode,
         mask,
         new_head[required - length..].to_vec().into(),
       ));
-    } else if nread > required {
-      // We read too much
-      self.read_buffer = Some(head[required..nread].to_vec());
     }
 
-    Ok(Frame::new(
+    let frame = Frame::new(
       fin,
       opcode,
       mask,
       head[required - length..required].to_vec().into(),
-    ))
+    );
+
+    if nread > required {
+      // We read too much
+      self.read_offset += required;
+      self.nread = Some(nread - required);
+    }
+
+    Ok(frame)
   }
 }
