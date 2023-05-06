@@ -221,7 +221,7 @@ impl<'f, S> WebSocket<S> {
       stream,
       write_buffer: Vec::with_capacity(2),
       read_buffer: vec![0; RECV_SIZE],
-      vectored: false,
+      vectored: true,
       auto_close: true,
       auto_pong: true,
       auto_apply_mask: true,
@@ -501,11 +501,14 @@ impl<'f, S> WebSocket<S> {
       ));
     }
 
+    let payload = &head[required - length..required];
     let frame = Frame::new(
       fin,
       opcode,
       mask,
-      head[required - length..required].to_vec().into(),
+      std::borrow::Cow::Borrowed(unsafe {
+        std::mem::transmute::<&[u8], &'f [u8]>(payload)
+      }),
     );
 
     if nread > required {
