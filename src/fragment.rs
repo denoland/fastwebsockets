@@ -71,7 +71,7 @@ pub struct FragmentCollector<S> {
   opcode: OpCode,
 }
 
-impl<'f, S> FragmentCollector<S> {
+impl<'f, S: 'static> FragmentCollector<S> {
   /// Creates a new `FragmentCollector` with the provided `WebSocket`.
   pub fn new(ws: WebSocket<S>) -> FragmentCollector<S>
   where
@@ -87,14 +87,15 @@ impl<'f, S> FragmentCollector<S> {
   /// Reads a WebSocket frame, collecting fragmented messages until the final frame is received and returns the completed message.
   ///
   /// Text frames payload is guaranteed to be valid UTF-8.
-  pub async fn read_frame(
-    &mut self,
-  ) -> Result<Frame<'f>, Box<dyn std::error::Error + Send + Sync>>
+  pub async fn read_frame<'a>(
+    &'a mut self,
+  ) -> Result<Frame<'a>, Box<dyn std::error::Error + Send + Sync>>
   where
     S: AsyncReadExt + AsyncWriteExt + Unpin,
   {
     loop {
-      let frame = self.ws.read_frame().await?;
+        let wself = unsafe { std::mem::transmute_copy::<_, &'a mut Self>(&self) };
+      let frame = wself.ws.read_frame().await?;
       match frame.opcode {
         OpCode::Text | OpCode::Binary => {
           if frame.fin {
@@ -201,7 +202,7 @@ impl<'f, S> FragmentCollector<S> {
   /// See `WebSocket::write_frame`.
   pub async fn write_frame(
     &mut self,
-    frame: Frame<'f>,
+    frame: Frame<'_>,
   ) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
   where
     S: AsyncReadExt + AsyncWriteExt + Unpin,

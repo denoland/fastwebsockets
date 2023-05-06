@@ -169,7 +169,7 @@ pub use crate::frame::Frame;
 pub use crate::frame::OpCode;
 pub use crate::mask::unmask;
 
-#[derive(PartialEq)]
+#[derive(PartialEq, Eq, Debug, Clone, Copy)]
 pub enum Role {
   Server,
   Client,
@@ -194,7 +194,7 @@ pub struct WebSocket<S> {
   read_offset: usize,
 }
 
-impl<'f, S> WebSocket<S> {
+impl<S> WebSocket<S> {
   /// Creates a new `WebSocket` from a stream that has already completed the WebSocket handshake.
   ///
   /// Use the `upgrade` feature to handle server upgrades and client handshakes.
@@ -292,9 +292,9 @@ impl<'f, S> WebSocket<S> {
   ///   Ok(())
   /// }
   /// ```
-  pub async fn write_frame(
-    &mut self,
-    mut frame: Frame<'f>,
+  pub async fn write_frame<'a>(
+    &'a mut self,
+    mut frame: Frame<'a>,
   ) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
   where
     S: AsyncReadExt + AsyncWriteExt + Unpin,
@@ -342,24 +342,28 @@ impl<'f, S> WebSocket<S> {
   ///   Ok(())
   /// }
   /// ```
-  pub async fn read_frame(
-    &mut self,
-  ) -> Result<Frame<'f>, Box<dyn std::error::Error + Send + Sync>>
+  pub async fn read_frame<'a>(
+    &'a mut self,
+  ) -> Result<Frame<'a>, Box<dyn std::error::Error + Send + Sync>>
   where
     S: AsyncReadExt + AsyncWriteExt + Unpin,
   {
-    loop {
-      let mut frame = self.parse_frame_header().await?;
-      if self.role == Role::Server && self.auto_apply_mask {
+    let role = self.role;
+    let auto_close = self.auto_close;
+    let closed = self.closed;
+    let auto_pong = self.auto_pong;
+    let auto_apply_mask = self.auto_apply_mask;
+    let mut frame = self.parse_frame_header().await?;
+      if role == Role::Server && auto_apply_mask {
         frame.unmask()
       };
 
-      if self.closed && frame.opcode != OpCode::Close {
+      if closed && frame.opcode != OpCode::Close {
         return Err("connection is closed".into());
       }
 
       match frame.opcode {
-        OpCode::Close if self.auto_close && !self.closed => {
+        OpCode::Close if auto_close && !closed => {
           match frame.payload.len() {
             0 => {}
             1 => return Err("invalid close frame".into()),
@@ -375,38 +379,37 @@ impl<'f, S> WebSocket<S> {
               std::str::from_utf8(&frame.payload[2..])?;
 
               if !code.is_allowed() {
-                let _ = self
-                  .write_frame(Frame::close(1002, &frame.payload[2..]))
-                  .await;
+               // let _ = self
+                //  .write_frame(Frame::close(1002, &frame.payload[2..]))
+                 // .await;
 
                 return Err("invalid close code".into());
               }
             }
           };
 
-          let _ = self
-            .write_frame(Frame::close_raw(frame.payload.clone()))
-            .await;
-          break Ok(frame);
+          // let _ = self
+            // .write_frame(Frame::close_raw(frame.payload.clone()))
+            // .await;
         }
-        OpCode::Ping if self.auto_pong => {
-          self.write_frame(Frame::pong(frame.payload)).await?;
+        OpCode::Ping if auto_pong => {
+          // self.write_frame(Frame::pong(frame.payload)).await?;
         }
         OpCode::Text => {
           if frame.fin && !frame.is_utf8() {
-            break Err("invalid utf-8".into());
+            return Err("invalid utf-8".into());
           }
 
-          break Ok(frame);
         }
-        _ => break Ok(frame),
+        _ => {},
       }
-    }
+
+    Ok(frame)
   }
 
-  async fn parse_frame_header(
-    &mut self,
-  ) -> Result<Frame<'f>, Box<dyn std::error::Error + Send + Sync>>
+  async fn parse_frame_header<'a>(
+    &'a mut self,
+  ) -> Result<Frame<'a>, Box<dyn std::error::Error + Send + Sync>>
   where
     S: AsyncReadExt + AsyncWriteExt + Unpin,
   {
@@ -505,7 +508,7 @@ impl<'f, S> WebSocket<S> {
       fin,
       opcode,
       mask,
-      head[required - length..required].to_vec().into(),
+      std::borrow::Cow::Borrowed(&head[required - length..required]),
     );
 
     if nread > required {
