@@ -54,6 +54,78 @@ macro_rules! repr_u8 {
     }
 }
 
+use core::ops::{Deref, DerefMut};
+
+pub enum CowMut<'a, B>
+where
+    B: 'a + ToOwned + ?Sized,
+    <B as ToOwned>::Owned: AsRef<B> + AsMut<B>,
+{
+    Borrowed(&'a mut B),
+    Owned(<B as ToOwned>::Owned),
+}
+
+impl<B> Deref for CowMut<'_, B>
+where
+    B: ToOwned + ?Sized,
+    <B as ToOwned>::Owned: AsRef<B> + AsMut<B>,
+{
+    type Target = B;
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            CowMut::Borrowed(borrowed) => borrowed,
+            CowMut::Owned(owned) => owned.as_ref(),
+        }
+    }
+}
+
+impl<B> DerefMut for CowMut<'_, B>
+where
+    B: ToOwned + ?Sized,
+    <B as ToOwned>::Owned: AsRef<B> + AsMut<B>,
+{
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        match self {
+            CowMut::Borrowed(borrowed) => borrowed,
+            CowMut::Owned(owned) => owned.as_mut(),
+        }
+    }
+}
+
+impl<'a> From<&'a mut [u8]> for CowMut<'a, [u8]> {
+    fn from(borrowed: &'a mut [u8]) -> CowMut<'a, [u8]> {
+        CowMut::Borrowed(borrowed)
+    }
+}
+
+impl From<Vec<u8>> for CowMut<'_, [u8]> {
+    fn from(owned: Vec<u8>) -> Self {
+        CowMut::Owned(owned)
+    }
+}
+
+impl From<CowMut<'_, [u8]>> for Vec<u8> {
+    fn from(cow: CowMut<'_, [u8]>) -> Self {
+        match cow {
+            CowMut::Borrowed(borrowed) => borrowed.to_vec(),
+            CowMut::Owned(owned) => owned,
+        }
+    }
+}
+
+impl<B> CowMut<'_, B> 
+  where B: ToOwned + ?Sized,
+        <B as ToOwned>::Owned: AsRef<B> + AsMut<B>,
+{
+  pub fn to_mut(&mut self) -> &mut B {
+    match self {
+      CowMut::Borrowed(borrowed) => borrowed,
+      CowMut::Owned(owned) => owned.as_mut(),
+    }
+  }
+}
+
 /// Represents a WebSocket frame.
 pub struct Frame<'f> {
   /// Indicates if this is the final frame in a message.
@@ -63,7 +135,7 @@ pub struct Frame<'f> {
   /// The masking key of the frame, if any.
   mask: Option<[u8; 4]>,
   /// The payload of the frame.
-  pub payload: Cow<'f, [u8]>,
+  pub payload: CowMut<'f, [u8]>,
 }
 
 const MAX_HEAD_SIZE: usize = 16;
@@ -74,7 +146,7 @@ impl<'f> Frame<'f> {
     fin: bool,
     opcode: OpCode,
     mask: Option<[u8; 4]>,
-    payload: Cow<'f, [u8]>,
+    payload: CowMut<'f, [u8]>,
   ) -> Self {
     Self {
       fin,
@@ -89,7 +161,7 @@ impl<'f> Frame<'f> {
   /// This is a convenience method for `Frame::new(true, OpCode::Text, None, payload)`.
   ///
   /// This method does not check if the payload is valid UTF-8.
-  pub fn text(payload: Cow<'f, [u8]>) -> Self {
+  pub fn text(payload: CowMut<'f, [u8]>) -> Self {
     Self {
       fin: true,
       opcode: OpCode::Text,
@@ -101,7 +173,7 @@ impl<'f> Frame<'f> {
   /// Create a new WebSocket binary `Frame`.
   ///
   /// This is a convenience method for `Frame::new(true, OpCode::Binary, None, payload)`.
-  pub fn binary(payload: Cow<'f, [u8]>) -> Self {
+  pub fn binary(payload: CowMut<'f, [u8]>) -> Self {
     Self {
       fin: true,
       opcode: OpCode::Binary,
@@ -133,7 +205,7 @@ impl<'f> Frame<'f> {
   /// This is a convenience method for `Frame::new(true, OpCode::Close, None, payload)`.
   ///
   /// This method does not check if `payload` is valid Close frame payload.
-  pub fn close_raw(payload: Cow<'f, [u8]>) -> Self {
+  pub fn close_raw(payload: CowMut<'f, [u8]>) -> Self {
     Self {
       fin: true,
       opcode: OpCode::Close,
@@ -145,7 +217,7 @@ impl<'f> Frame<'f> {
   /// Create a new WebSocket pong `Frame`.
   ///
   /// This is a convenience method for `Frame::new(true, OpCode::Pong, None, payload)`.
-  pub fn pong(payload: Cow<'f, [u8]>) -> Self {
+  pub fn pong(payload: CowMut<'f, [u8]>) -> Self {
     Self {
       fin: true,
       opcode: OpCode::Pong,

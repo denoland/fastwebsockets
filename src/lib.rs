@@ -167,6 +167,7 @@ pub use crate::close::CloseCode;
 pub use crate::fragment::FragmentCollector;
 pub use crate::frame::Frame;
 pub use crate::frame::OpCode;
+pub use crate::frame::CowMut;
 pub use crate::mask::unmask;
 
 #[derive(PartialEq)]
@@ -384,9 +385,9 @@ impl<'f, S> WebSocket<S> {
             }
           };
 
-          let _ = self
-            .write_frame(Frame::close_raw(frame.payload.clone()))
-            .await;
+          // let _ = self
+          //  .write_frame(Frame::close_raw(frame.payload.clone()))
+           // .await;
           break Ok(frame);
         }
         OpCode::Ping if self.auto_pong => {
@@ -497,15 +498,18 @@ impl<'f, S> WebSocket<S> {
         fin,
         opcode,
         mask,
-        new_head[required - length..].to_vec().into(),
+        CowMut::Owned(new_head[required - length..].to_vec()),
       ));
     }
 
+    let payload = &mut head[required - length..required];
     let frame = Frame::new(
       fin,
       opcode,
       mask,
-      head[required - length..required].to_vec().into(),
+      unsafe {
+        CowMut::Borrowed(std::mem::transmute(payload))
+      }
     );
 
     if nread > required {
