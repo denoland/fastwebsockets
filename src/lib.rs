@@ -179,11 +179,12 @@ pub enum Role {
 // 512 KiB
 const RECV_SIZE: usize = 524288;
 
+static mut RECV_BUF: Option<Vec<u8>> = None;
+
 /// WebSocket protocol implementation over an async stream.
 pub struct WebSocket<S> {
   stream: S,
   write_buffer: Vec<u8>,
-  read_buffer: Vec<u8>,
   vectored: bool,
   auto_close: bool,
   auto_pong: bool,
@@ -218,10 +219,15 @@ impl<'f, S> WebSocket<S> {
   where
     S: AsyncReadExt + AsyncWriteExt + Unpin,
   {
+    unsafe {
+      if RECV_BUF.is_none() {
+        RECV_BUF = Some(vec![0; RECV_SIZE]);
+      }
+    }
+
     Self {
       stream,
       write_buffer: Vec::with_capacity(2),
-      read_buffer: vec![0; RECV_SIZE],
       vectored: true,
       auto_close: true,
       auto_pong: true,
@@ -422,7 +428,11 @@ impl<'f, S> WebSocket<S> {
     }
 
     let mut nread = self.nread.unwrap_or(0);
-    let head = &mut self.read_buffer[self.read_offset..];
+    // let head = &mut self.read_buffer[self.read_offset..];
+    let head = unsafe {
+      let buf = RECV_BUF.as_mut().unwrap();
+      &mut buf[self.read_offset..]
+    };
 
     while nread < 2 {
       nread += eof!(self.stream.read(&mut head[nread..]).await?);

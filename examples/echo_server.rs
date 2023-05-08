@@ -45,7 +45,7 @@ async fn server_upgrade(
   let (response, fut) = upgrade::upgrade(&mut req)?;
 
   tokio::spawn(async move {
-    if let Err(e) = handle_client(fut).await {
+    if let Err(e) = tokio::task::unconstrained(handle_client(fut)).await {
       eprintln!("Error in websocket connection: {}", e);
     }
   });
