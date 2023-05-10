@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::borrow::Cow;
-
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
+
+use core::ops::Deref;
 
 macro_rules! repr_u8 {
     ($(#[$meta:meta])* $vis:vis enum $name:ident {
@@ -54,77 +54,77 @@ macro_rules! repr_u8 {
     }
 }
 
-use core::ops::Deref;
-use core::ops::DerefMut;
-
-pub enum CowMut<'a, B>
-where
-  B: 'a + ToOwned + ?Sized,
-  <B as ToOwned>::Owned: AsRef<B> + AsMut<B>,
-{
-  Borrowed(&'a mut B),
-  Owned(<B as ToOwned>::Owned),
+pub enum Payload<'a> {
+  BorrowedMut(&'a mut [u8]),
+  Borrowed(&'a [u8]),
+  Owned(Vec<u8>),
 }
 
-impl<B> Deref for CowMut<'_, B>
-where
-  B: ToOwned + ?Sized,
-  <B as ToOwned>::Owned: AsRef<B> + AsMut<B>,
-{
-  type Target = B;
+impl<'a> core::fmt::Debug for Payload<'a> {
+  fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    f.debug_struct("Payload").field("len", &self.len()).finish()
+  }
+}
+
+impl Deref for Payload<'_> {
+  type Target = [u8];
 
   fn deref(&self) -> &Self::Target {
     match self {
-      CowMut::Borrowed(borrowed) => borrowed,
-      CowMut::Owned(owned) => owned.as_ref(),
+      Payload::Borrowed(borrowed) => borrowed,
+      Payload::BorrowedMut(borrowed_mut) => borrowed_mut,
+      Payload::Owned(owned) => owned.as_ref(),
     }
   }
 }
 
-impl<B> DerefMut for CowMut<'_, B>
-where
-  B: ToOwned + ?Sized,
-  <B as ToOwned>::Owned: AsRef<B> + AsMut<B>,
-{
-  fn deref_mut(&mut self) -> &mut Self::Target {
-    match self {
-      CowMut::Borrowed(borrowed) => borrowed,
-      CowMut::Owned(owned) => owned.as_mut(),
-    }
+impl<'a> From<&'a mut [u8]> for Payload<'a> {
+  fn from(borrowed: &'a mut [u8]) -> Payload<'a> {
+    Payload::BorrowedMut(borrowed)
   }
 }
 
-impl<'a> From<&'a mut [u8]> for CowMut<'a, [u8]> {
-  fn from(borrowed: &'a mut [u8]) -> CowMut<'a, [u8]> {
-    CowMut::Borrowed(borrowed)
+impl<'a> From<&'a [u8]> for Payload<'a> {
+  fn from(borrowed: &'a [u8]) -> Payload<'a> {
+    Payload::Borrowed(borrowed)
   }
 }
 
-impl From<Vec<u8>> for CowMut<'_, [u8]> {
+impl From<Vec<u8>> for Payload<'_> {
   fn from(owned: Vec<u8>) -> Self {
-    CowMut::Owned(owned)
+    Payload::Owned(owned)
   }
 }
 
-impl From<CowMut<'_, [u8]>> for Vec<u8> {
-  fn from(cow: CowMut<'_, [u8]>) -> Self {
+impl From<Payload<'_>> for Vec<u8> {
+  fn from(cow: Payload<'_>) -> Self {
     match cow {
-      CowMut::Borrowed(borrowed) => borrowed.to_vec(),
-      CowMut::Owned(owned) => owned,
+      Payload::Borrowed(borrowed) => borrowed.to_vec(),
+      Payload::BorrowedMut(borrowed_mut) => borrowed_mut.to_vec(),
+      Payload::Owned(owned) => owned,
     }
   }
 }
 
-impl<B> CowMut<'_, B>
-where
-  B: ToOwned + ?Sized,
-  <B as ToOwned>::Owned: AsRef<B> + AsMut<B>,
-{
-  pub fn to_mut(&mut self) -> &mut B {
+impl Payload<'_> {
+  pub fn to_mut(&mut self) -> &mut [u8] {
     match self {
-      CowMut::Borrowed(borrowed) => borrowed,
-      CowMut::Owned(owned) => owned.as_mut(),
+      Payload::Borrowed(borrowed) => {
+        *self = Payload::Owned(borrowed.to_owned());
+        match self {
+          Payload::Owned(owned) => owned,
+          _ => unreachable!(),
+        }
+      }
+      Payload::BorrowedMut(borrowed) => borrowed,
+      Payload::Owned(ref mut owned) => owned,
     }
+  }
+}
+
+impl<'a> PartialEq<&'a [u8]> for Payload<'a> {
+  fn eq(&self, other: &&'a [u8]) -> bool {
+    self.deref() == *other
   }
 }
 
@@ -137,7 +137,7 @@ pub struct Frame<'f> {
   /// The masking key of the frame, if any.
   mask: Option<[u8; 4]>,
   /// The payload of the frame.
-  pub payload: CowMut<'f, [u8]>,
+  pub payload: Payload<'f>,
 }
 
 const MAX_HEAD_SIZE: usize = 16;
@@ -148,7 +148,7 @@ impl<'f> Frame<'f> {
     fin: bool,
     opcode: OpCode,
     mask: Option<[u8; 4]>,
-    payload: CowMut<'f, [u8]>,
+    payload: Payload<'f>,
   ) -> Self {
     Self {
       fin,
@@ -163,7 +163,7 @@ impl<'f> Frame<'f> {
   /// This is a convenience method for `Frame::new(true, OpCode::Text, None, payload)`.
   ///
   /// This method does not check if the payload is valid UTF-8.
-  pub fn text(payload: CowMut<'f, [u8]>) -> Self {
+  pub fn text(payload: Payload<'f>) -> Self {
     Self {
       fin: true,
       opcode: OpCode::Text,
@@ -175,7 +175,7 @@ impl<'f> Frame<'f> {
   /// Create a new WebSocket binary `Frame`.
   ///
   /// This is a convenience method for `Frame::new(true, OpCode::Binary, None, payload)`.
-  pub fn binary(payload: CowMut<'f, [u8]>) -> Self {
+  pub fn binary(payload: Payload<'f>) -> Self {
     Self {
       fin: true,
       opcode: OpCode::Binary,
@@ -207,7 +207,7 @@ impl<'f> Frame<'f> {
   /// This is a convenience method for `Frame::new(true, OpCode::Close, None, payload)`.
   ///
   /// This method does not check if `payload` is valid Close frame payload.
-  pub fn close_raw(payload: CowMut<'f, [u8]>) -> Self {
+  pub fn close_raw(payload: Payload<'f>) -> Self {
     Self {
       fin: true,
       opcode: OpCode::Close,
@@ -219,7 +219,7 @@ impl<'f> Frame<'f> {
   /// Create a new WebSocket pong `Frame`.
   ///
   /// This is a convenience method for `Frame::new(true, OpCode::Pong, None, payload)`.
-  pub fn pong(payload: CowMut<'f, [u8]>) -> Self {
+  pub fn pong(payload: Payload<'f>) -> Self {
     Self {
       fin: true,
       opcode: OpCode::Pong,

@@ -87,9 +87,9 @@ impl<'f, S> FragmentCollector<S> {
   /// Reads a WebSocket frame, collecting fragmented messages until the final frame is received and returns the completed message.
   ///
   /// Text frames payload is guaranteed to be valid UTF-8.
-  pub async fn read_frame<'a>(
-    &'a mut self,
-  ) -> Result<Frame<'a>, Box<dyn std::error::Error + Send + Sync>>
+  pub async fn read_frame(
+    &mut self,
+  ) -> Result<Frame<'f>, Box<dyn std::error::Error + Send + Sync>>
   where
     S: AsyncReadExt + AsyncWriteExt + Unpin,
   {
@@ -199,9 +199,9 @@ impl<'f, S> FragmentCollector<S> {
   }
 
   /// See `WebSocket::write_frame`.
-  pub async fn write_frame<'a>(
-    &'a mut self,
-    frame: Frame<'a>,
+  pub async fn write_frame(
+    &mut self,
+    frame: Frame<'f>,
   ) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
   where
     S: AsyncReadExt + AsyncWriteExt + Unpin,
