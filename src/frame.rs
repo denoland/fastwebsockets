@@ -54,69 +54,71 @@ macro_rules! repr_u8 {
     }
 }
 
-use core::ops::{Deref, DerefMut};
+use core::ops::Deref;
+use core::ops::DerefMut;
 
 pub enum CowMut<'a, B>
 where
-    B: 'a + ToOwned + ?Sized,
-    <B as ToOwned>::Owned: AsRef<B> + AsMut<B>,
+  B: 'a + ToOwned + ?Sized,
+  <B as ToOwned>::Owned: AsRef<B> + AsMut<B>,
 {
-    Borrowed(&'a mut B),
-    Owned(<B as ToOwned>::Owned),
+  Borrowed(&'a mut B),
+  Owned(<B as ToOwned>::Owned),
 }
 
 impl<B> Deref for CowMut<'_, B>
 where
-    B: ToOwned + ?Sized,
-    <B as ToOwned>::Owned: AsRef<B> + AsMut<B>,
+  B: ToOwned + ?Sized,
+  <B as ToOwned>::Owned: AsRef<B> + AsMut<B>,
 {
-    type Target = B;
+  type Target = B;
 
-    fn deref(&self) -> &Self::Target {
-        match self {
-            CowMut::Borrowed(borrowed) => borrowed,
-            CowMut::Owned(owned) => owned.as_ref(),
-        }
+  fn deref(&self) -> &Self::Target {
+    match self {
+      CowMut::Borrowed(borrowed) => borrowed,
+      CowMut::Owned(owned) => owned.as_ref(),
     }
+  }
 }
 
 impl<B> DerefMut for CowMut<'_, B>
 where
-    B: ToOwned + ?Sized,
-    <B as ToOwned>::Owned: AsRef<B> + AsMut<B>,
+  B: ToOwned + ?Sized,
+  <B as ToOwned>::Owned: AsRef<B> + AsMut<B>,
 {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        match self {
-            CowMut::Borrowed(borrowed) => borrowed,
-            CowMut::Owned(owned) => owned.as_mut(),
-        }
+  fn deref_mut(&mut self) -> &mut Self::Target {
+    match self {
+      CowMut::Borrowed(borrowed) => borrowed,
+      CowMut::Owned(owned) => owned.as_mut(),
     }
+  }
 }
 
 impl<'a> From<&'a mut [u8]> for CowMut<'a, [u8]> {
-    fn from(borrowed: &'a mut [u8]) -> CowMut<'a, [u8]> {
-        CowMut::Borrowed(borrowed)
-    }
+  fn from(borrowed: &'a mut [u8]) -> CowMut<'a, [u8]> {
+    CowMut::Borrowed(borrowed)
+  }
 }
 
 impl From<Vec<u8>> for CowMut<'_, [u8]> {
-    fn from(owned: Vec<u8>) -> Self {
-        CowMut::Owned(owned)
-    }
+  fn from(owned: Vec<u8>) -> Self {
+    CowMut::Owned(owned)
+  }
 }
 
 impl From<CowMut<'_, [u8]>> for Vec<u8> {
-    fn from(cow: CowMut<'_, [u8]>) -> Self {
-        match cow {
-            CowMut::Borrowed(borrowed) => borrowed.to_vec(),
-            CowMut::Owned(owned) => owned,
-        }
+  fn from(cow: CowMut<'_, [u8]>) -> Self {
+    match cow {
+      CowMut::Borrowed(borrowed) => borrowed.to_vec(),
+      CowMut::Owned(owned) => owned,
     }
+  }
 }
 
-impl<B> CowMut<'_, B> 
-  where B: ToOwned + ?Sized,
-        <B as ToOwned>::Owned: AsRef<B> + AsMut<B>,
+impl<B> CowMut<'_, B>
+where
+  B: ToOwned + ?Sized,
+  <B as ToOwned>::Owned: AsRef<B> + AsMut<B>,
 {
   pub fn to_mut(&mut self) -> &mut B {
     match self {

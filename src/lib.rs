@@ -165,10 +165,13 @@ use tokio::io::AsyncWriteExt;
 
 pub use crate::close::CloseCode;
 pub use crate::fragment::FragmentCollector;
+pub use crate::frame::CowMut;
 pub use crate::frame::Frame;
 pub use crate::frame::OpCode;
-pub use crate::frame::CowMut;
 pub use crate::mask::unmask;
+
+use core::ops::Deref;
+use std::ptr::NonNull;
 
 #[derive(PartialEq)]
 pub enum Role {
@@ -178,8 +181,57 @@ pub enum Role {
 
 // 512 KiB
 const RECV_SIZE: usize = 524288;
+static mut RECV_BUF: SharedRecv = SharedRecv::null();
 
-static mut RECV_BUF: Option<Vec<u8>> = None;
+#[repr(transparent)]
+struct SharedRecv {
+  inner: Option<NonNull<u8>>,
+}
+
+impl SharedRecv {
+  pub(crate) const fn null() -> Self {
+    Self {
+      inner: None,
+    }
+  }
+
+  pub(crate) fn init(&mut self) {
+      match self.inner.as_mut() {
+        Some(_) => {}
+        None => {
+          let mut vec = vec![0; RECV_SIZE];
+          let ptr = vec.as_mut_ptr();
+          std::mem::forget(vec);
+
+          unsafe { self.inner = Some(NonNull::new_unchecked(ptr)) };
+        }
+      }
+  }
+
+  pub(crate) fn get_mut(&self) -> &mut [u8] {
+    unsafe {
+      std::slice::from_raw_parts_mut(
+        self.inner.unwrap().as_ptr(),
+        RECV_SIZE,
+      )
+    }
+  }
+}
+
+impl Deref for SharedRecv {
+  type Target = [u8];
+
+  fn deref(&self) -> &Self::Target {
+    unsafe {
+      std::slice::from_raw_parts(
+        self.inner.unwrap().as_ptr(),
+        RECV_SIZE,
+      )
+    }
+  }
+}
+
+unsafe impl Send for SharedRecv {}
 
 /// WebSocket protocol implementation over an async stream.
 pub struct WebSocket<S> {
@@ -189,11 +241,14 @@ pub struct WebSocket<S> {
   auto_close: bool,
   auto_pong: bool,
   max_message_size: usize,
+  writev_threshold: usize,
   auto_apply_mask: bool,
   closed: bool,
   role: Role,
   nread: Option<usize>,
-  read_offset: usize,
+  spill: Option<Vec<u8>>,
+  // !Sync marker
+  _marker: std::marker::PhantomData<SharedRecv>,
 }
 
 impl<'f, S> WebSocket<S> {
@@ -219,12 +274,7 @@ impl<'f, S> WebSocket<S> {
   where
     S: AsyncReadExt + AsyncWriteExt + Unpin,
   {
-    unsafe {
-      if RECV_BUF.is_none() {
-        RECV_BUF = Some(vec![0; RECV_SIZE]);
-      }
-    }
-
+    unsafe { RECV_BUF.init() };
     Self {
       stream,
       write_buffer: Vec::with_capacity(2),
@@ -233,10 +283,12 @@ impl<'f, S> WebSocket<S> {
       auto_pong: true,
       auto_apply_mask: true,
       max_message_size: 64 << 20,
+      writev_threshold: 64,
       nread: None,
       closed: false,
       role,
-      read_offset: 0,
+      spill: None,
+      _marker: std::marker::PhantomData,
     }
   }
 
@@ -251,6 +303,10 @@ impl<'f, S> WebSocket<S> {
   /// Default: `true`
   pub fn set_writev(&mut self, vectored: bool) {
     self.vectored = vectored;
+  }
+
+  pub fn set_writev_threshold(&mut self, threshold: usize) {
+    self.writev_threshold = threshold;
   }
 
   /// Sets whether to automatically close the connection when a close frame is received. When set to `false`, the application will have to manually send close frames.
@@ -299,9 +355,9 @@ impl<'f, S> WebSocket<S> {
   ///   Ok(())
   /// }
   /// ```
-  pub async fn write_frame(
-    &mut self,
-    mut frame: Frame<'f>,
+  pub async fn write_frame<'a>(
+    &'a mut self,
+    mut frame: Frame<'a>,
   ) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
   where
     S: AsyncReadExt + AsyncWriteExt + Unpin,
@@ -314,7 +370,7 @@ impl<'f, S> WebSocket<S> {
       self.closed = true;
     }
 
-    if self.vectored {
+    if self.vectored && frame.payload.len() > self.writev_threshold {
       frame.writev(&mut self.stream).await?;
     } else {
       let text = frame.write(&mut self.write_buffer);
@@ -349,7 +405,18 @@ impl<'f, S> WebSocket<S> {
   ///   Ok(())
   /// }
   /// ```
-  pub async fn read_frame(
+  pub async fn read_frame<'a>(
+    &'a mut self,
+  ) -> Result<Frame<'a>, Box<dyn std::error::Error + Send + Sync>>
+  where
+    S: AsyncReadExt + AsyncWriteExt + Unpin,
+  {
+    self.read_frame_inner().await
+  }
+
+  /// XXX: Do not expose this method to the public API.
+  /// Lifetime requirements for safe recv buffer use are not enforced.
+  pub(crate) async fn read_frame_inner(
     &mut self,
   ) -> Result<Frame<'f>, Box<dyn std::error::Error + Send + Sync>>
   where
@@ -393,7 +460,7 @@ impl<'f, S> WebSocket<S> {
 
           // let _ = self
           //  .write_frame(Frame::close_raw(frame.payload.clone()))
-           // .await;
+          // .await;
           break Ok(frame);
         }
         OpCode::Ping if self.auto_pong => {
@@ -411,9 +478,9 @@ impl<'f, S> WebSocket<S> {
     }
   }
 
-  async fn parse_frame_header(
+  async fn parse_frame_header<'a>(
     &mut self,
-  ) -> Result<Frame<'f>, Box<dyn std::error::Error + Send + Sync>>
+  ) -> Result<Frame<'a>, Box<dyn std::error::Error + Send + Sync>>
   where
     S: AsyncReadExt + AsyncWriteExt + Unpin,
   {
@@ -427,12 +494,13 @@ impl<'f, S> WebSocket<S> {
       }};
     }
 
-    let mut nread = self.nread.unwrap_or(0);
-    // let head = &mut self.read_buffer[self.read_offset..];
-    let head = unsafe {
-      let buf = RECV_BUF.as_mut().unwrap();
-      &mut buf[self.read_offset..]
-    };
+    let head = unsafe { RECV_BUF.get_mut() };
+    let mut nread = 0;
+
+    if let Some(spill) = self.spill.take() {
+      head[..spill.len()].copy_from_slice(&spill);
+      nread += spill.len();
+    }
 
     while nread < 2 {
       nread += eof!(self.stream.read(&mut head[nread..]).await?);
@@ -513,21 +581,45 @@ impl<'f, S> WebSocket<S> {
     }
 
     let payload = &mut head[required - length..required];
-    let frame = Frame::new(
-      fin,
-      opcode,
-      mask,
-      unsafe {
-        CowMut::Borrowed(std::mem::transmute(payload))
-      }
-    );
+    let frame = Frame::new(fin, opcode, mask, unsafe {
+      CowMut::Borrowed(std::mem::transmute(payload))
+    });
 
     if nread > required {
       // We read too much
-      self.read_offset += required;
-      self.nread = Some(nread - required);
+      self.spill = Some(head[required..nread].to_vec());
     }
 
     Ok(frame)
   }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  const _: () = {
+    const fn assert_unsync<S>() {
+      // Generic trait with a blanket impl over `()` for all types.
+      trait AmbiguousIfImpl<A> {
+        // Required for actually being able to reference the trait.
+        fn some_item() {}
+      }
+
+      impl<T: ?Sized> AmbiguousIfImpl<()> for T {}
+
+      // Used for the specialized impl when *all* traits in
+      // `$($t)+` are implemented.
+      #[allow(dead_code)]
+      struct Invalid;
+
+      impl<T: ?Sized + Sync> AmbiguousIfImpl<Invalid> for T {}
+
+      // If there is only one specialized trait impl, type inference with
+      // `_` can be resolved and this can compile. Fails to compile if
+      // `$x` implements `AmbiguousIfImpl<Invalid>`.
+      let _ = <S as AmbiguousIfImpl<_>>::some_item;
+    }
+    assert_unsync::<WebSocket<tokio::net::TcpStream>>();
+  };
 }
