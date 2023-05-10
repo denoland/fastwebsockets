@@ -155,6 +155,7 @@ mod frame;
 #[cfg_attr(docsrs, doc(cfg(feature = "upgrade")))]
 pub mod handshake;
 mod mask;
+mod recv;
 /// HTTP upgrades.
 #[cfg(feature = "upgrade")]
 #[cfg_attr(docsrs, doc(cfg(feature = "upgrade")))]
@@ -169,61 +170,13 @@ pub use crate::frame::Frame;
 pub use crate::frame::OpCode;
 pub use crate::frame::Payload;
 pub use crate::mask::unmask;
-
-use core::ops::Deref;
-use std::ptr::NonNull;
+use crate::recv::SharedRecv;
 
 #[derive(PartialEq)]
 pub enum Role {
   Server,
   Client,
 }
-
-// 512 KiB
-const RECV_SIZE: usize = 524288;
-static mut RECV_BUF: SharedRecv = SharedRecv::null();
-
-#[repr(transparent)]
-struct SharedRecv {
-  inner: Option<NonNull<u8>>,
-}
-
-impl SharedRecv {
-  pub(crate) const fn null() -> Self {
-    Self { inner: None }
-  }
-
-  pub(crate) fn init(&mut self) {
-    match self.inner.as_mut() {
-      Some(_) => {}
-      None => {
-        let mut vec = vec![0; RECV_SIZE];
-        let ptr = vec.as_mut_ptr();
-        std::mem::forget(vec);
-
-        unsafe { self.inner = Some(NonNull::new_unchecked(ptr)) };
-      }
-    }
-  }
-
-  pub(crate) fn get_mut(&self) -> &mut [u8] {
-    unsafe {
-      std::slice::from_raw_parts_mut(self.inner.unwrap().as_ptr(), RECV_SIZE)
-    }
-  }
-}
-
-impl Deref for SharedRecv {
-  type Target = [u8];
-
-  fn deref(&self) -> &Self::Target {
-    unsafe {
-      std::slice::from_raw_parts(self.inner.unwrap().as_ptr(), RECV_SIZE)
-    }
-  }
-}
-
-unsafe impl Send for SharedRecv {}
 
 struct WriteHalf<S> {
   stream: S,
@@ -271,7 +224,7 @@ impl<'f, S> WebSocket<S> {
   where
     S: AsyncReadExt + AsyncWriteExt + Unpin,
   {
-    unsafe { RECV_BUF.init() };
+    recv::init_once();
     Self {
       write_half: WriteHalf {
         stream,
@@ -496,7 +449,7 @@ impl<'f, S> WebSocket<S> {
     }
 
     let stream = &mut self.write_half.stream;
-    let head = unsafe { RECV_BUF.get_mut() };
+    let head = recv::init_once();
     let mut nread = 0;
 
     if let Some(spill) = self.spill.take() {
