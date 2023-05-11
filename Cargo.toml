@@ -39,18 +39,20 @@ rustls-pemfile = "1.0"
 hyper = { version = "0.14.26", features = ["http1", "server", "client", "tcp"] }
 assert2 = "0.3.4"
 trybuild = "1.0.80"
-# bench
 criterion = "0.4.0"
 
 [[bench]]
 name = "unmask"
 harness = false
 
+[profile.release-debug-info]
+inherits = "release"
+debug = true
+
 [profile.release]
 opt-level = 3
 lto = true
 codegen-units = 1
-# debug = true
 
 [package.metadata.docs.rs]
 features = ["upgrade"]
