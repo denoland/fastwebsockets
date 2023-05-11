@@ -122,8 +122,14 @@ impl Payload<'_> {
   }
 }
 
-impl<'a> PartialEq<&'a [u8]> for Payload<'a> {
-  fn eq(&self, other: &&'a [u8]) -> bool {
+impl<'a> PartialEq<&'_ [u8]> for Payload<'a> {
+  fn eq(&self, other: &&'_ [u8]) -> bool {
+    self.deref() == *other
+  }
+}
+
+impl<'a, const N: usize> PartialEq<&'_ [u8; N]> for Payload<'a> {
+  fn eq(&self, other: &&'_ [u8; N]) -> bool {
     self.deref() == *other
   }
 }
