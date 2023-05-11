@@ -236,7 +236,7 @@ impl<'f, S> WebSocket<S> {
       auto_pong: true,
       auto_apply_mask: true,
       max_message_size: 64 << 20,
-      writev_threshold: 64,
+      writev_threshold: 1024,
       role,
       spill: None,
       _marker: std::marker::PhantomData,
@@ -537,7 +537,12 @@ impl<'f, S> WebSocket<S> {
     }
 
     let payload = &mut head[required - length..required];
-    let frame = Frame::new(fin, opcode, mask, Payload::Borrowed(payload));
+    let payload = if payload.len() > self.writev_threshold {
+      Payload::BorrowedMut(payload)
+    } else {
+      Payload::Borrowed(payload)
+    };
+    let frame = Frame::new(fin, opcode, mask, payload);
     Ok(frame)
   }
 }
