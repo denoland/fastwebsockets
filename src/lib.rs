@@ -540,7 +540,7 @@ impl<'f, S> WebSocket<S> {
     let payload = if payload.len() > self.writev_threshold {
       Payload::BorrowedMut(payload)
     } else {
-      Payload::Borrowed(payload)
+      Payload::Owned(payload.to_vec())
     };
     let frame = Frame::new(fin, opcode, mask, payload);
     Ok(frame)
