@@ -54,7 +54,7 @@ const cases = [
   {
     conn: 500,
     bytes: 16 * 1024,
-  }
+  },
 ];
 
 for (const { conn, bytes } of cases) {

@@ -17,4 +17,3 @@ rust-websocket 0.26.5
 uWebSockets v20.40.0
 tokio-tungstenite 0.18.0
 ```
-
