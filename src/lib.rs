@@ -155,6 +155,7 @@ mod frame;
 #[cfg_attr(docsrs, doc(cfg(feature = "upgrade")))]
 pub mod handshake;
 mod mask;
+mod recv;
 /// HTTP upgrades.
 #[cfg(feature = "upgrade")]
 #[cfg_attr(docsrs, doc(cfg(feature = "upgrade")))]
@@ -167,7 +168,9 @@ pub use crate::close::CloseCode;
 pub use crate::fragment::FragmentCollector;
 pub use crate::frame::Frame;
 pub use crate::frame::OpCode;
+pub use crate::frame::Payload;
 pub use crate::mask::unmask;
+use crate::recv::SharedRecv;
 
 #[derive(PartialEq)]
 pub enum Role {
@@ -175,23 +178,27 @@ pub enum Role {
   Client,
 }
 
-// 512 KiB
-const RECV_SIZE: usize = 524288;
+struct WriteHalf<S> {
+  stream: S,
+  closed: bool,
+  write_buffer: Vec<u8>,
+}
 
 /// WebSocket protocol implementation over an async stream.
 pub struct WebSocket<S> {
-  stream: S,
-  write_buffer: Vec<u8>,
-  read_buffer: Vec<u8>,
+  write_half: WriteHalf<S>,
+  // Config
   vectored: bool,
   auto_close: bool,
   auto_pong: bool,
   max_message_size: usize,
+  writev_threshold: usize,
   auto_apply_mask: bool,
-  closed: bool,
   role: Role,
-  nread: Option<usize>,
-  read_offset: usize,
+  // Read-half
+  spill: Option<Vec<u8>>,
+  // !Sync marker
+  _marker: std::marker::PhantomData<SharedRecv>,
 }
 
 impl<'f, S> WebSocket<S> {
@@ -217,26 +224,30 @@ impl<'f, S> WebSocket<S> {
   where
     S: AsyncReadExt + AsyncWriteExt + Unpin,
   {
+    recv::init_once();
     Self {
-      stream,
-      write_buffer: Vec::with_capacity(2),
-      read_buffer: vec![0; RECV_SIZE],
-      vectored: false,
+      write_half: WriteHalf {
+        stream,
+        closed: false,
+        write_buffer: Vec::with_capacity(2),
+      },
+      vectored: true,
       auto_close: true,
       auto_pong: true,
       auto_apply_mask: true,
       max_message_size: 64 << 20,
-      nread: None,
-      closed: false,
+      writev_threshold: 1024,
       role,
-      read_offset: 0,
+      spill: None,
+      _marker: std::marker::PhantomData,
     }
   }
 
   /// Consumes the `WebSocket` and returns the underlying stream.
   #[inline]
   pub fn into_inner(self) -> S {
-    self.stream
+    // self.write_half.into_inner().stream
+    self.write_half.stream
   }
 
   /// Sets whether to use vectored writes. This option does not guarantee that vectored writes will be always used.
@@ -244,6 +255,10 @@ impl<'f, S> WebSocket<S> {
   /// Default: `true`
   pub fn set_writev(&mut self, vectored: bool) {
     self.vectored = vectored;
+  }
+
+  pub fn set_writev_threshold(&mut self, threshold: usize) {
+    self.writev_threshold = threshold;
   }
 
   /// Sets whether to automatically close the connection when a close frame is received. When set to `false`, the application will have to manually send close frames.
@@ -292,9 +307,9 @@ impl<'f, S> WebSocket<S> {
   ///   Ok(())
   /// }
   /// ```
-  pub async fn write_frame(
-    &mut self,
-    mut frame: Frame<'f>,
+  pub async fn write_frame<'a>(
+    &'a mut self,
+    mut frame: Frame<'a>,
   ) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
   where
     S: AsyncReadExt + AsyncWriteExt + Unpin,
@@ -303,15 +318,16 @@ impl<'f, S> WebSocket<S> {
       frame.mask();
     }
 
+    let write_half = &mut self.write_half;
     if frame.opcode == OpCode::Close {
-      self.closed = true;
+      write_half.closed = true;
     }
 
-    if self.vectored {
-      frame.writev(&mut self.stream).await?;
+    if self.vectored && frame.payload.len() > self.writev_threshold {
+      frame.writev(&mut write_half.stream).await?;
     } else {
-      let text = frame.write(&mut self.write_buffer);
-      self.stream.write_all(text).await?;
+      let text = frame.write(&mut write_half.write_buffer);
+      write_half.stream.write_all(text).await?;
     }
 
     Ok(())
@@ -348,18 +364,30 @@ impl<'f, S> WebSocket<S> {
   where
     S: AsyncReadExt + AsyncWriteExt + Unpin,
   {
+    self.read_frame_inner().await
+  }
+
+  /// XXX: Do not expose this method to the public API.
+  /// Lifetime requirements for safe recv buffer use are not enforced.
+  pub(crate) async fn read_frame_inner(
+    &mut self,
+  ) -> Result<Frame<'f>, Box<dyn std::error::Error + Send + Sync>>
+  where
+    S: AsyncReadExt + AsyncWriteExt + Unpin,
+  {
     loop {
       let mut frame = self.parse_frame_header().await?;
       if self.role == Role::Server && self.auto_apply_mask {
         frame.unmask()
       };
 
-      if self.closed && frame.opcode != OpCode::Close {
+      let write_half = &mut self.write_half;
+      if write_half.closed && frame.opcode != OpCode::Close {
         return Err("connection is closed".into());
       }
 
       match frame.opcode {
-        OpCode::Close if self.auto_close && !self.closed => {
+        OpCode::Close if self.auto_close && !write_half.closed => {
           match frame.payload.len() {
             0 => {}
             1 => return Err("invalid close frame".into()),
@@ -385,7 +413,7 @@ impl<'f, S> WebSocket<S> {
           };
 
           let _ = self
-            .write_frame(Frame::close_raw(frame.payload.clone()))
+            .write_frame(Frame::close_raw(frame.payload.to_owned().into()))
             .await;
           break Ok(frame);
         }
@@ -404,9 +432,9 @@ impl<'f, S> WebSocket<S> {
     }
   }
 
-  async fn parse_frame_header(
+  async fn parse_frame_header<'a>(
     &mut self,
-  ) -> Result<Frame<'f>, Box<dyn std::error::Error + Send + Sync>>
+  ) -> Result<Frame<'a>, Box<dyn std::error::Error + Send + Sync>>
   where
     S: AsyncReadExt + AsyncWriteExt + Unpin,
   {
@@ -420,11 +448,17 @@ impl<'f, S> WebSocket<S> {
       }};
     }
 
-    let mut nread = self.nread.unwrap_or(0);
-    let head = &mut self.read_buffer[self.read_offset..];
+    let stream = &mut self.write_half.stream;
+    let head = recv::init_once();
+    let mut nread = 0;
+
+    if let Some(spill) = self.spill.take() {
+      head[..spill.len()].copy_from_slice(&spill);
+      nread += spill.len();
+    }
 
     while nread < 2 {
-      nread += eof!(self.stream.read(&mut head[nread..]).await?);
+      nread += eof!(stream.read(&mut head[nread..]).await?);
     }
 
     let fin = head[0] & 0b10000000 != 0;
@@ -449,7 +483,7 @@ impl<'f, S> WebSocket<S> {
 
     let length: usize = if extra > 0 {
       while nread < 2 + extra {
-        nread += eof!(self.stream.read(&mut head[nread..]).await?);
+        nread += eof!(stream.read(&mut head[nread..]).await?);
       }
 
       match extra {
@@ -464,7 +498,7 @@ impl<'f, S> WebSocket<S> {
     let mask = match masked {
       true => {
         while nread < 2 + extra + 4 {
-          nread += eof!(self.stream.read(&mut head[nread..]).await?);
+          nread += eof!(stream.read(&mut head[nread..]).await?);
         }
 
         Some(head[2 + extra..2 + extra + 4].try_into().unwrap())
@@ -485,35 +519,60 @@ impl<'f, S> WebSocket<S> {
     }
 
     let required = 2 + extra + mask.map(|_| 4).unwrap_or(0) + length;
-
-    self.nread = None;
     if required > nread {
       // Allocate more space
       let mut new_head = head.to_vec();
       new_head.resize(required, 0);
 
-      self.stream.read_exact(&mut new_head[nread..]).await?;
+      stream.read_exact(&mut new_head[nread..]).await?;
       return Ok(Frame::new(
         fin,
         opcode,
         mask,
-        new_head[required - length..].to_vec().into(),
+        Payload::Owned(new_head[required - length..].to_vec()),
       ));
-    }
-
-    let frame = Frame::new(
-      fin,
-      opcode,
-      mask,
-      head[required - length..required].to_vec().into(),
-    );
-
-    if nread > required {
+    } else if nread > required {
       // We read too much
-      self.read_offset += required;
-      self.nread = Some(nread - required);
+      self.spill = Some(head[required..nread].to_vec());
     }
 
+    let payload = &mut head[required - length..required];
+    let payload = if payload.len() > self.writev_threshold {
+      Payload::BorrowedMut(payload)
+    } else {
+      Payload::Owned(payload.to_vec())
+    };
+    let frame = Frame::new(fin, opcode, mask, payload);
     Ok(frame)
   }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  const _: () = {
+    const fn assert_unsync<S>() {
+      // Generic trait with a blanket impl over `()` for all types.
+      trait AmbiguousIfImpl<A> {
+        // Required for actually being able to reference the trait.
+        fn some_item() {}
+      }
+
+      impl<T: ?Sized> AmbiguousIfImpl<()> for T {}
+
+      // Used for the specialized impl when *all* traits in
+      // `$($t)+` are implemented.
+      #[allow(dead_code)]
+      struct Invalid;
+
+      impl<T: ?Sized + Sync> AmbiguousIfImpl<Invalid> for T {}
+
+      // If there is only one specialized trait impl, type inference with
+      // `_` can be resolved and this can compile. Fails to compile if
+      // `$x` implements `AmbiguousIfImpl<Invalid>`.
+      let _ = <S as AmbiguousIfImpl<_>>::some_item;
+    }
+    assert_unsync::<WebSocket<tokio::net::TcpStream>>();
+  };
 }

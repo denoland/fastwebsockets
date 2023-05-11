@@ -94,7 +94,7 @@ impl<'f, S> FragmentCollector<S> {
     S: AsyncReadExt + AsyncWriteExt + Unpin,
   {
     loop {
-      let frame = self.ws.read_frame().await?;
+      let frame = self.ws.read_frame_inner().await?;
       match frame.opcode {
         OpCode::Text | OpCode::Binary => {
           if frame.fin {

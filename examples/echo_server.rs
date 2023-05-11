@@ -44,8 +44,8 @@ async fn server_upgrade(
 ) -> Result<Response<Body>, Box<dyn std::error::Error + Send + Sync>> {
   let (response, fut) = upgrade::upgrade(&mut req)?;
 
-  tokio::spawn(async move {
-    if let Err(e) = handle_client(fut).await {
+  tokio::task::spawn(async move {
+    if let Err(e) = tokio::task::unconstrained(handle_client(fut)).await {
       eprintln!("Error in websocket connection: {}", e);
     }
   });

@@ -47,6 +47,14 @@ const cases = [
     conn: 10,
     bytes: 16 * 1024,
   },
+  {
+    conn: 200,
+    bytes: 16 * 1024,
+  },
+  {
+    conn: 500,
+    bytes: 16 * 1024,
+  },
 ];
 
 for (const { conn, bytes } of cases) {

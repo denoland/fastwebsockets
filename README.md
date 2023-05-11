@@ -1,6 +1,6 @@
 [![Crates.io](https://img.shields.io/crates/v/fastwebsockets.svg)](https://crates.io/crates/fastwebsockets)
 
-[Documentation](https://docs.rs/fastwebsockets)
+[Documentation](https://docs.rs/fastwebsockets) | [Benchmarks](benches/)
 
 _fastwebsockets_ is a fast WebSocket protocol implementation.
 
