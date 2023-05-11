@@ -43,22 +43,16 @@
 <path d="M 48,355.5 L 56,355.5" />
 </g>
 <g stroke="rgb(0,0,0)" stroke-width="1" stroke-linecap="butt" stroke-linejoin="miter" stroke-miterlimit="4" stroke-opacity="0.1" fill="none">
-<path d="M 57,315.5 L 768,315.5" />
+<path d="M 57,301.5 L 768,301.5" />
 </g>
 <g stroke="rgb(0,0,0)" stroke-width="1" stroke-linecap="butt" stroke-linejoin="miter" stroke-miterlimit="4" stroke-opacity="0.1" fill="none">
-<path d="M 48,315.5 L 56,315.5" />
+<path d="M 48,301.5 L 56,301.5" />
 </g>
 <g stroke="rgb(0,0,0)" stroke-width="1" stroke-linecap="butt" stroke-linejoin="miter" stroke-miterlimit="4" stroke-opacity="0.1" fill="none">
-<path d="M 57,274.5 L 768,274.5" />
+<path d="M 57,247.5 L 768,247.5" />
 </g>
 <g stroke="rgb(0,0,0)" stroke-width="1" stroke-linecap="butt" stroke-linejoin="miter" stroke-miterlimit="4" stroke-opacity="0.1" fill="none">
-<path d="M 48,274.5 L 56,274.5" />
-</g>
-<g stroke="rgb(0,0,0)" stroke-width="1" stroke-linecap="butt" stroke-linejoin="miter" stroke-miterlimit="4" stroke-opacity="0.1" fill="none">
-<path d="M 57,234.5 L 768,234.5" />
-</g>
-<g stroke="rgb(0,0,0)" stroke-width="1" stroke-linecap="butt" stroke-linejoin="miter" stroke-miterlimit="4" stroke-opacity="0.1" fill="none">
-<path d="M 48,234.5 L 56,234.5" />
+<path d="M 48,247.5 L 56,247.5" />
 </g>
 <g stroke="rgb(0,0,0)" stroke-width="1" stroke-linecap="butt" stroke-linejoin="miter" stroke-miterlimit="4" stroke-opacity="0.1" fill="none">
 <path d="M 57,193.5 L 768,193.5" />
@@ -67,22 +61,16 @@
 <path d="M 48,193.5 L 56,193.5" />
 </g>
 <g stroke="rgb(0,0,0)" stroke-width="1" stroke-linecap="butt" stroke-linejoin="miter" stroke-miterlimit="4" stroke-opacity="0.1" fill="none">
-<path d="M 57,153.5 L 768,153.5" />
+<path d="M 57,139.5 L 768,139.5" />
 </g>
 <g stroke="rgb(0,0,0)" stroke-width="1" stroke-linecap="butt" stroke-linejoin="miter" stroke-miterlimit="4" stroke-opacity="0.1" fill="none">
-<path d="M 48,153.5 L 56,153.5" />
+<path d="M 48,139.5 L 56,139.5" />
 </g>
 <g stroke="rgb(0,0,0)" stroke-width="1" stroke-linecap="butt" stroke-linejoin="miter" stroke-miterlimit="4" stroke-opacity="0.1" fill="none">
-<path d="M 57,112.5 L 768,112.5" />
+<path d="M 57,85.5 L 768,85.5" />
 </g>
 <g stroke="rgb(0,0,0)" stroke-width="1" stroke-linecap="butt" stroke-linejoin="miter" stroke-miterlimit="4" stroke-opacity="0.1" fill="none">
-<path d="M 48,112.5 L 56,112.5" />
-</g>
-<g stroke="rgb(0,0,0)" stroke-width="1" stroke-linecap="butt" stroke-linejoin="miter" stroke-miterlimit="4" stroke-opacity="0.1" fill="none">
-<path d="M 57,72.5 L 768,72.5" />
-</g>
-<g stroke="rgb(0,0,0)" stroke-width="1" stroke-linecap="butt" stroke-linejoin="miter" stroke-miterlimit="4" stroke-opacity="0.1" fill="none">
-<path d="M 48,72.5 L 56,72.5" />
+<path d="M 48,85.5 L 56,85.5" />
 </g>
 <g stroke="rgb(0,0,0)" stroke-width="1" stroke-linecap="butt" stroke-linejoin="miter" stroke-miterlimit="4" stroke-opacity="0.1" fill="none">
 <path d="M 57,32.5 L 768,32.5" />
@@ -107,10 +95,10 @@
 ><tspan x="0" y="7.199999999999999">uWebSockets</tspan></text></g>
 <g stroke="none" fill="#666" fill-rule="nonzero" fill-opacity="1"  clip-path="url(#clip-2)" >
 <text style="font:normal 12px &apos;Helvetica Neue&apos;, &apos;Helvetica&apos;, &apos;Arial&apos;, sans-serif;" text-anchor="middle" dominant-baseline="middle" transform="matrix(1 0 0 1 501 366.6)" 
-><tspan x="0" y="7.199999999999999">rust-websocket</tspan></text></g>
+><tspan x="0" y="7.199999999999999">tokio-tungstenite</tspan></text></g>
 <g stroke="none" fill="#666" fill-rule="nonzero" fill-opacity="1"  clip-path="url(#clip-2)" >
 <text style="font:normal 12px &apos;Helvetica Neue&apos;, &apos;Helvetica&apos;, &apos;Arial&apos;, sans-serif;" text-anchor="middle" dominant-baseline="middle" transform="matrix(1 0 0 1 679 366.6)" 
-><tspan x="0" y="7.199999999999999">tokio-tungstenite</tspan></text></g>
+><tspan x="0" y="7.199999999999999">rust-websocket</tspan></text></g>
 <g stroke="rgb(0,0,0)" stroke-width="1" stroke-linecap="butt" stroke-linejoin="miter" stroke-miterlimit="4" stroke-opacity="0.1" fill="none">
 <path d="M 56.5,32 L 56.5,356" />
 </g>
@@ -118,39 +106,33 @@
 <text style="font:normal 12px &apos;Helvetica Neue&apos;, &apos;Helvetica&apos;, &apos;Arial&apos;, sans-serif;" text-anchor="end" dominant-baseline="middle" transform="matrix(1 0 0 1 45 355.6)" 
 ><tspan x="0" y="0">0</tspan></text></g>
 <g stroke="none" fill="#666" fill-rule="nonzero" fill-opacity="1"  clip-path="url(#clip-3)" >
-<text style="font:normal 12px &apos;Helvetica Neue&apos;, &apos;Helvetica&apos;, &apos;Arial&apos;, sans-serif;" text-anchor="end" dominant-baseline="middle" transform="matrix(1 0 0 1 45 315.15000000000003)" 
+<text style="font:normal 12px &apos;Helvetica Neue&apos;, &apos;Helvetica&apos;, &apos;Arial&apos;, sans-serif;" text-anchor="end" dominant-baseline="middle" transform="matrix(1 0 0 1 45 301.6666666666667)" 
 ><tspan x="0" y="0">20,000</tspan></text></g>
 <g stroke="none" fill="#666" fill-rule="nonzero" fill-opacity="1"  clip-path="url(#clip-3)" >
-<text style="font:normal 12px &apos;Helvetica Neue&apos;, &apos;Helvetica&apos;, &apos;Arial&apos;, sans-serif;" text-anchor="end" dominant-baseline="middle" transform="matrix(1 0 0 1 45 274.70000000000005)" 
+<text style="font:normal 12px &apos;Helvetica Neue&apos;, &apos;Helvetica&apos;, &apos;Arial&apos;, sans-serif;" text-anchor="end" dominant-baseline="middle" transform="matrix(1 0 0 1 45 247.73333333333338)" 
 ><tspan x="0" y="0">40,000</tspan></text></g>
 <g stroke="none" fill="#666" fill-rule="nonzero" fill-opacity="1"  clip-path="url(#clip-3)" >
-<text style="font:normal 12px &apos;Helvetica Neue&apos;, &apos;Helvetica&apos;, &apos;Arial&apos;, sans-serif;" text-anchor="end" dominant-baseline="middle" transform="matrix(1 0 0 1 45 234.25)" 
+<text style="font:normal 12px &apos;Helvetica Neue&apos;, &apos;Helvetica&apos;, &apos;Arial&apos;, sans-serif;" text-anchor="end" dominant-baseline="middle" transform="matrix(1 0 0 1 45 193.8)" 
 ><tspan x="0" y="0">60,000</tspan></text></g>
 <g stroke="none" fill="#666" fill-rule="nonzero" fill-opacity="1"  clip-path="url(#clip-3)" >
-<text style="font:normal 12px &apos;Helvetica Neue&apos;, &apos;Helvetica&apos;, &apos;Arial&apos;, sans-serif;" text-anchor="end" dominant-baseline="middle" transform="matrix(1 0 0 1 45 193.8)" 
+<text style="font:normal 12px &apos;Helvetica Neue&apos;, &apos;Helvetica&apos;, &apos;Arial&apos;, sans-serif;" text-anchor="end" dominant-baseline="middle" transform="matrix(1 0 0 1 45 139.86666666666667)" 
 ><tspan x="0" y="0">80,000</tspan></text></g>
 <g stroke="none" fill="#666" fill-rule="nonzero" fill-opacity="1"  clip-path="url(#clip-3)" >
-<text style="font:normal 12px &apos;Helvetica Neue&apos;, &apos;Helvetica&apos;, &apos;Arial&apos;, sans-serif;" text-anchor="end" dominant-baseline="middle" transform="matrix(1 0 0 1 45 153.35000000000002)" 
+<text style="font:normal 12px &apos;Helvetica Neue&apos;, &apos;Helvetica&apos;, &apos;Arial&apos;, sans-serif;" text-anchor="end" dominant-baseline="middle" transform="matrix(1 0 0 1 45 85.93333333333332)" 
 ><tspan x="0" y="0">100,000</tspan></text></g>
 <g stroke="none" fill="#666" fill-rule="nonzero" fill-opacity="1"  clip-path="url(#clip-3)" >
-<text style="font:normal 12px &apos;Helvetica Neue&apos;, &apos;Helvetica&apos;, &apos;Arial&apos;, sans-serif;" text-anchor="end" dominant-baseline="middle" transform="matrix(1 0 0 1 45 112.9)" 
-><tspan x="0" y="0">120,000</tspan></text></g>
-<g stroke="none" fill="#666" fill-rule="nonzero" fill-opacity="1"  clip-path="url(#clip-3)" >
-<text style="font:normal 12px &apos;Helvetica Neue&apos;, &apos;Helvetica&apos;, &apos;Arial&apos;, sans-serif;" text-anchor="end" dominant-baseline="middle" transform="matrix(1 0 0 1 45 72.45)" 
-><tspan x="0" y="0">140,000</tspan></text></g>
-<g stroke="none" fill="#666" fill-rule="nonzero" fill-opacity="1"  clip-path="url(#clip-3)" >
 <text style="font:normal 12px &apos;Helvetica Neue&apos;, &apos;Helvetica&apos;, &apos;Arial&apos;, sans-serif;" text-anchor="end" dominant-baseline="middle" transform="matrix(1 0 0 1 45 32)" 
-><tspan x="0" y="0">160,000</tspan></text></g>
+><tspan x="0" y="0">120,000</tspan></text></g>
 <g stroke="none" fill="rgb(54,162,235)" fill-rule="nonzero" fill-opacity="1"  clip-path="url(#clip-4)" >
-<path d="M 80.92,37.122992 L 80.92,355.1 209.08,355.1 209.08,37.122992 Z" />
+<path d="M 80.92,71.722799 L 80.92,355.1 209.08,355.1 209.08,71.722799 Z" />
 </g>
 <g stroke="none" fill="rgb(54,162,235)" fill-rule="nonzero" fill-opacity="1"  clip-path="url(#clip-4)" >
-<path d="M 258.92,52.477138 L 258.92,355.1 387.08,355.1 387.08,52.477138 Z" />
+<path d="M 258.92,89.735633 L 258.92,355.1 387.08,355.1 387.08,89.735633 Z" />
 </g>
 <g stroke="none" fill="rgb(54,162,235)" fill-rule="nonzero" fill-opacity="1"  clip-path="url(#clip-4)" >
-<path d="M 436.92,170.560127 L 436.92,355.1 565.08,355.1 565.08,170.560127 Z" />
+<path d="M 436.92,144.642463 L 436.92,355.1 565.08,355.1 565.08,144.642463 Z" />
 </g>
 <g stroke="none" fill="rgb(54,162,235)" fill-rule="nonzero" fill-opacity="1"  clip-path="url(#clip-4)" >
-<path d="M 614.92,189.984891 L 614.92,355.1 743.08,355.1 743.08,189.984891 Z" />
+<path d="M 614.92,152.123017 L 614.92,355.1 743.08,355.1 743.08,152.123017 Z" />
 </g>
 </svg>
