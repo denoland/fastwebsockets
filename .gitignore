@@ -1,4 +1,5 @@
 /target
 *.txt
 *.o
+.DS_Store
 benches/load_test
