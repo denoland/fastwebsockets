@@ -26,6 +26,7 @@ base64 = { version = "0.21.0", optional = true }
 sha1 = { version = "0.10.5", optional = true }
 utf-8 = "0.7.5"
 rand = "0.8.4"
+thiserror = "1.0.40"
 
 [features]
 default = ["simd"]
@@ -40,6 +41,7 @@ hyper = { version = "0.14.26", features = ["http1", "server", "client", "tcp"] }
 assert2 = "0.3.4"
 trybuild = "1.0.80"
 criterion = "0.4.0"
+anyhow = "1.0.71"
 
 [[bench]]
 name = "unmask"

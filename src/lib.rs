@@ -25,10 +25,11 @@
 //! ```
 //! use tokio::net::TcpStream;
 //! use fastwebsockets::{WebSocket, OpCode, Role};
+//! use anyhow::Result;
 //!
 //! async fn handle(
 //!   socket: TcpStream,
-//! ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+//! ) -> Result<()> {
 //!   let mut ws = WebSocket::after_handshake(socket, Role::Server);
 //!   ws.set_writev(false);
 //!   ws.set_auto_close(true);
@@ -58,10 +59,11 @@
 //! ```
 //! use fastwebsockets::{FragmentCollector, WebSocket, Role};
 //! use tokio::net::TcpStream;
+//! use anyhow::Result;
 //!
 //! async fn handle(
 //!   socket: TcpStream,
-//! ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+//! ) -> Result<()> {
 //!   let mut ws = WebSocket::after_handshake(socket, Role::Server);
 //!   let mut ws = FragmentCollector::new(ws);
 //!   let incoming = ws.read_frame().await?;
@@ -83,10 +85,11 @@
 //! ```
 //! use fastwebsockets::upgrade::upgrade;
 //! use hyper::{Request, Body, Response};
+//! use anyhow::Result;
 //!
 //! async fn server_upgrade(
 //!   mut req: Request<Body>,
-//! ) -> Result<Response<Body>, Box<dyn std::error::Error + Send + Sync>> {
+//! ) -> Result<Response<Body>> {
 //!   let (response, fut) = upgrade(&mut req)?;
 //!
 //!   tokio::spawn(async move {
@@ -106,10 +109,7 @@
 //! use hyper::{Request, Body, upgrade::Upgraded, header::{UPGRADE, CONNECTION}};
 //! use tokio::net::TcpStream;
 //! use std::future::Future;
-//!
-//! // Define a type alias for convenience
-//! type Result<T> =
-//!   std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
+//! use anyhow::Result;
 //!
 //! async fn connect() -> Result<FragmentCollector<Upgraded>> {
 //!   let stream = TcpStream::connect("localhost:9001").await?;
@@ -148,6 +148,7 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
 mod close;
+mod error;
 mod fragment;
 mod frame;
 /// Client handshake.
@@ -165,6 +166,7 @@ use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
 
 pub use crate::close::CloseCode;
+pub use crate::error::WebSocketError;
 pub use crate::fragment::FragmentCollector;
 pub use crate::frame::Frame;
 pub use crate::frame::OpCode;
@@ -211,10 +213,11 @@ impl<'f, S> WebSocket<S> {
   /// ```
   /// use tokio::net::TcpStream;
   /// use fastwebsockets::{WebSocket, OpCode, Role};
+  /// use anyhow::Result;
   ///
   /// async fn handle_client(
   ///   socket: TcpStream,
-  /// ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+  /// ) -> Result<()> {
   ///   let mut ws = WebSocket::after_handshake(socket, Role::Server);
   ///   // ...
   ///   Ok(())
@@ -298,10 +301,11 @@ impl<'f, S> WebSocket<S> {
   /// ```
   /// use fastwebsockets::{WebSocket, Frame, OpCode};
   /// use tokio::net::TcpStream;
+  /// use anyhow::Result;
   ///
   /// async fn send(
   ///   ws: &mut WebSocket<TcpStream>
-  /// ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+  /// ) -> Result<()> {
   ///   let mut frame = Frame::binary(vec![0x01, 0x02, 0x03].into());
   ///   ws.write_frame(frame).await?;
   ///   Ok(())
@@ -310,7 +314,7 @@ impl<'f, S> WebSocket<S> {
   pub async fn write_frame<'a>(
     &'a mut self,
     mut frame: Frame<'a>,
-  ) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
+  ) -> Result<(), WebSocketError>
   where
     S: AsyncReadExt + AsyncWriteExt + Unpin,
   {
@@ -344,10 +348,11 @@ impl<'f, S> WebSocket<S> {
   /// ```
   /// use fastwebsockets::{OpCode, WebSocket, Frame};
   /// use tokio::net::TcpStream;
+  /// use anyhow::Result;
   ///
   /// async fn echo(
   ///   ws: &mut WebSocket<TcpStream>
-  /// ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+  /// ) -> Result<()> {
   ///   let frame = ws.read_frame().await?;
   ///   match frame.opcode {
   ///     OpCode::Text | OpCode::Binary => {
@@ -358,9 +363,7 @@ impl<'f, S> WebSocket<S> {
   ///   Ok(())
   /// }
   /// ```
-  pub async fn read_frame(
-    &mut self,
-  ) -> Result<Frame<'f>, Box<dyn std::error::Error + Send + Sync>>
+  pub async fn read_frame(&mut self) -> Result<Frame<'f>, WebSocketError>
   where
     S: AsyncReadExt + AsyncWriteExt + Unpin,
   {
@@ -371,7 +374,7 @@ impl<'f, S> WebSocket<S> {
   /// Lifetime requirements for safe recv buffer use are not enforced.
   pub(crate) async fn read_frame_inner(
     &mut self,
-  ) -> Result<Frame<'f>, Box<dyn std::error::Error + Send + Sync>>
+  ) -> Result<Frame<'f>, WebSocketError>
   where
     S: AsyncReadExt + AsyncWriteExt + Unpin,
   {
@@ -383,31 +386,35 @@ impl<'f, S> WebSocket<S> {
 
       let write_half = &mut self.write_half;
       if write_half.closed && frame.opcode != OpCode::Close {
-        return Err("connection is closed".into());
+        return Err(WebSocketError::ConnectionClosed);
       }
 
       match frame.opcode {
         OpCode::Close if self.auto_close && !write_half.closed => {
           match frame.payload.len() {
             0 => {}
-            1 => return Err("invalid close frame".into()),
+            1 => return Err(WebSocketError::InvalidCloseFrame),
             _ => {
               let code = close::CloseCode::from(u16::from_be_bytes(
                 frame.payload[0..2].try_into().unwrap(),
               ));
 
               #[cfg(feature = "simd")]
-              simdutf8::basic::from_utf8(&frame.payload[2..])?;
+              if simdutf8::basic::from_utf8(&frame.payload[2..]).is_err() {
+                return Err(WebSocketError::InvalidUTF8);
+              };
 
               #[cfg(not(feature = "simd"))]
-              std::str::from_utf8(&frame.payload[2..])?;
+              if std::str::from_utf8(&frame.payload[2..]).is_err() {
+                return Err(WebSocketError::InvalidUTF8);
+              };
 
               if !code.is_allowed() {
                 let _ = self
                   .write_frame(Frame::close(1002, &frame.payload[2..]))
                   .await;
 
-                return Err("invalid close code".into());
+                return Err(WebSocketError::InvalidCloseCode);
               }
             }
           };
@@ -422,7 +429,7 @@ impl<'f, S> WebSocket<S> {
         }
         OpCode::Text => {
           if frame.fin && !frame.is_utf8() {
-            break Err("invalid utf-8".into());
+            break Err(WebSocketError::InvalidUTF8);
           }
 
           break Ok(frame);
@@ -434,7 +441,7 @@ impl<'f, S> WebSocket<S> {
 
   async fn parse_frame_header<'a>(
     &mut self,
-  ) -> Result<Frame<'a>, Box<dyn std::error::Error + Send + Sync>>
+  ) -> Result<Frame<'a>, WebSocketError>
   where
     S: AsyncReadExt + AsyncWriteExt + Unpin,
   {
@@ -442,7 +449,7 @@ impl<'f, S> WebSocket<S> {
       ($n:expr) => {{
         let n = $n;
         if n == 0 {
-          return Err("unexpected eof".into());
+          return Err(WebSocketError::UnexpectedEOF);
         }
         n
       }};
@@ -468,7 +475,7 @@ impl<'f, S> WebSocket<S> {
     let rsv3 = head[0] & 0b00010000 != 0;
 
     if rsv1 || rsv2 || rsv3 {
-      return Err("reserved bits are not zero".into());
+      return Err(WebSocketError::ReservedBitsNotZero);
     }
 
     let opcode = frame::OpCode::try_from(head[0] & 0b00001111)?;
@@ -507,15 +514,15 @@ impl<'f, S> WebSocket<S> {
     };
 
     if frame::is_control(opcode) && !fin {
-      return Err("control frame must not be fragmented".into());
+      return Err(WebSocketError::ControlFrameFragmented);
     }
 
     if opcode == OpCode::Ping && length > 125 {
-      return Err("Ping frame too large".into());
+      return Err(WebSocketError::PingFrameTooLarge);
     }
 
     if length >= self.max_message_size {
-      return Err("Frame too large".into());
+      return Err(WebSocketError::FrameTooLarge);
     }
 
     let required = 2 + extra + mask.map(|_| 4).unwrap_or(0) + length;

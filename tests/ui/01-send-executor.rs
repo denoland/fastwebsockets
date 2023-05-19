@@ -6,6 +6,7 @@ use hyper::Body;
 use hyper::Request;
 use std::future::Future;
 use tokio::net::TcpStream;
+use anyhow::Result;
 
 struct SpawnExecutor;
 
@@ -21,7 +22,7 @@ where
 
 async fn connect(
   path: &str,
-) -> Result<WebSocket<Upgraded>, Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<WebSocket<Upgraded>> {
   let stream = TcpStream::connect("localhost:9001").await?;
 
   let req = Request::builder()

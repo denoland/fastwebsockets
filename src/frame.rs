@@ -17,6 +17,8 @@ use tokio::io::AsyncWriteExt;
 
 use core::ops::Deref;
 
+use crate::WebSocketError;
+
 macro_rules! repr_u8 {
     ($(#[$meta:meta])* $vis:vis enum $name:ident {
       $($(#[$vmeta:meta])* $vname:ident $(= $val:expr)?,)*
@@ -26,28 +28,13 @@ macro_rules! repr_u8 {
         $($(#[$vmeta])* $vname $(= $val)?,)*
       }
 
-      #[derive(Debug)]
-      pub enum Error {
-        InvalidValue,
-      }
-
-      impl std::fmt::Display for Error {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-          match self {
-            Error::InvalidValue => write!(f, "invalid value"),
-          }
-        }
-      }
-
-      impl std::error::Error for Error {}
-
       impl core::convert::TryFrom<u8> for $name {
-        type Error = Error;
+        type Error = WebSocketError;
 
         fn try_from(v: u8) -> Result<Self, Self::Error> {
           match v {
             $(x if x == $name::$vname as u8 => Ok($name::$vname),)*
-            _ => Err(Error::InvalidValue),
+            _ => Err(WebSocketError::InvalidValue),
           }
         }
       }
