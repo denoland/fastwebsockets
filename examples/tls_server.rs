@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use anyhow::Result;
 use fastwebsockets::upgrade;
 use fastwebsockets::OpCode;
 use hyper::server::conn::Http;
@@ -25,11 +26,8 @@ use tokio_rustls::rustls;
 use tokio_rustls::rustls::Certificate;
 use tokio_rustls::rustls::PrivateKey;
 use tokio_rustls::TlsAcceptor;
-use anyhow::Result;
 
-async fn handle_client(
-  fut: upgrade::UpgradeFut,
-) -> Result<()> {
+async fn handle_client(fut: upgrade::UpgradeFut) -> Result<()> {
   let mut ws = fut.await?;
   ws.set_writev(false);
   let mut ws = fastwebsockets::FragmentCollector::new(ws);
@@ -48,9 +46,7 @@ async fn handle_client(
   Ok(())
 }
 
-async fn server_upgrade(
-  mut req: Request<Body>,
-) -> Result<Response<Body>> {
+async fn server_upgrade(mut req: Request<Body>) -> Result<Response<Body>> {
   let (response, fut) = upgrade::upgrade(&mut req)?;
 
   tokio::spawn(async move {
@@ -62,8 +58,7 @@ async fn server_upgrade(
   Ok(response)
 }
 
-fn tls_acceptor(
-) -> Result<TlsAcceptor> {
+fn tls_acceptor() -> Result<TlsAcceptor> {
   static KEY: &[u8] = include_bytes!("./localhost.key");
   static CERT: &[u8] = include_bytes!("./localhost.crt");
 

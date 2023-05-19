@@ -22,9 +22,7 @@ use hyper::Request;
 use hyper::Response;
 use tokio::net::TcpListener;
 
-async fn handle_client(
-  fut: upgrade::UpgradeFut,
-) -> Result<(), WebSocketError> {
+async fn handle_client(fut: upgrade::UpgradeFut) -> Result<(), WebSocketError> {
   let mut ws = fastwebsockets::FragmentCollector::new(fut.await?);
 
   loop {

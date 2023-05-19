@@ -14,6 +14,7 @@
 
 use std::future::Future;
 
+use anyhow::Result;
 use fastwebsockets::FragmentCollector;
 use fastwebsockets::Frame;
 use fastwebsockets::OpCode;
@@ -23,7 +24,6 @@ use hyper::upgrade::Upgraded;
 use hyper::Body;
 use hyper::Request;
 use tokio::net::TcpStream;
-use anyhow::Result;
 
 struct SpawnExecutor;
 

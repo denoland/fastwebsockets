@@ -36,9 +36,9 @@ pub enum WebSocketError {
   InvalidValue,
   #[error("Sec-WebSocket-Key header is missing")]
   MissingSecWebSocketKey,
-	#[error(transparent)]
+  #[error(transparent)]
   IoError(#[from] std::io::Error),
-	#[cfg(feature = "upgrade")]
-	#[error(transparent)]
+  #[cfg(feature = "upgrade")]
+  #[error(transparent)]
   HTTPError(#[from] hyper::Error),
 }

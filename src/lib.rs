@@ -401,12 +401,12 @@ impl<'f, S> WebSocket<S> {
 
               #[cfg(feature = "simd")]
               if simdutf8::basic::from_utf8(&frame.payload[2..]).is_err() {
-                return Err(WebSocketError::InvalidUTF8)
+                return Err(WebSocketError::InvalidUTF8);
               };
 
               #[cfg(not(feature = "simd"))]
               if std::str::from_utf8(&frame.payload[2..]).is_err() {
-                return Err(WebSocketError::InvalidUTF8)
+                return Err(WebSocketError::InvalidUTF8);
               };
 
               if !code.is_allowed() {
