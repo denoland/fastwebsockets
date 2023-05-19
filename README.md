@@ -16,7 +16,7 @@ use fastwebsockets::{Frame, OpCode, WebSocket};
 
 async fn handle_client(
   mut socket: TcpStream,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<(), WebSocketError> {
   handshake(&mut socket).await?;
 
   let mut ws = WebSocket::after_handshake(socket);
@@ -69,10 +69,11 @@ This feature is powered by [hyper](https://docs.rs/hyper).
 ```rust
 use fastwebsockets::upgrade::upgrade;
 use hyper::{Request, Body, Response};
+use anyhow::Result;
 
 async fn server_upgrade(
   mut req: Request<Body>,
-) -> Result<Response<Body>, Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<Response<Body>> {
   let (response, fut) = upgrade::upgrade(&mut req)?;
 
   tokio::spawn(async move {
@@ -93,10 +94,7 @@ use fastwebsockets::WebSocket;
 use hyper::{Request, Body, upgrade::Upgraded, header::{UPGRADE, CONNECTION}};
 use tokio::net::TcpStream;
 use std::future::Future;
-
-// Define a type alias for convenience
-type Result<T> =
-  std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
+use anyhow::Result;
 
 async fn connect() -> Result<WebSocket<Upgraded>> {
   let stream = TcpStream::connect("localhost:9001").await?;

@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::error::WebSocketError;
 use crate::frame::Frame;
 use crate::OpCode;
 use crate::WebSocket;
@@ -44,10 +45,11 @@ impl Fragment {
 /// ```
 /// use tokio::net::TcpStream;
 /// use fastwebsockets::{WebSocket, FragmentCollector, OpCode, Role};
+/// use anyhow::Result;
 ///
 /// async fn handle_client(
 ///   socket: TcpStream,
-/// ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+/// ) -> Result<()> {
 ///   let ws = WebSocket::after_handshake(socket, Role::Server);
 ///   let mut ws = FragmentCollector::new(ws);
 ///
@@ -89,7 +91,7 @@ impl<'f, S> FragmentCollector<S> {
   /// Text frames payload is guaranteed to be valid UTF-8.
   pub async fn read_frame(
     &mut self,
-  ) -> Result<Frame<'f>, Box<dyn std::error::Error + Send + Sync>>
+  ) -> Result<Frame<'f>, WebSocketError>
   where
     S: AsyncReadExt + AsyncWriteExt + Unpin,
   {
@@ -99,7 +101,7 @@ impl<'f, S> FragmentCollector<S> {
         OpCode::Text | OpCode::Binary => {
           if frame.fin {
             if self.fragments.is_some() {
-              return Err("Invalid fragment".into());
+              return Err(WebSocketError::InvalidFragment);
             }
             return Ok(Frame::new(
               true,
@@ -121,7 +123,7 @@ impl<'f, S> FragmentCollector<S> {
                   valid_prefix.as_bytes().to_vec(),
                 )),
                 Err(utf8::DecodeError::Invalid { .. }) => {
-                  return Err("Invalid UTF-8".into());
+                  return Err(WebSocketError::InvalidUTF8);
                 }
               },
               OpCode::Binary => Some(Fragment::Binary(frame.payload.into())),
@@ -132,7 +134,7 @@ impl<'f, S> FragmentCollector<S> {
         }
         OpCode::Continuation => match self.fragments.as_mut() {
           None => {
-            return Err("Invalid continuation frame".into());
+            return Err(WebSocketError::InvalidContinuationFrame);
           }
           Some(Fragment::Text(data, input)) => {
             let mut tail = &frame.payload[..];
@@ -146,7 +148,7 @@ impl<'f, S> FragmentCollector<S> {
                     input.extend_from_slice(text.as_bytes());
                   }
                   Err(_) => {
-                    return Err("Invalid UTF-8".into());
+                    return Err(WebSocketError::InvalidUTF8);
                   }
                 }
               } else {
@@ -168,7 +170,7 @@ impl<'f, S> FragmentCollector<S> {
               }
               Err(utf8::DecodeError::Invalid { valid_prefix, .. }) => {
                 input.extend_from_slice(valid_prefix.as_bytes());
-                return Err("Invalid UTF-8".into());
+                return Err(WebSocketError::InvalidUTF8);
               }
             }
 
@@ -202,7 +204,7 @@ impl<'f, S> FragmentCollector<S> {
   pub async fn write_frame(
     &mut self,
     frame: Frame<'f>,
-  ) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
+  ) -> Result<(), WebSocketError>
   where
     S: AsyncReadExt + AsyncWriteExt + Unpin,
   {

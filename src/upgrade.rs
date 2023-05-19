@@ -33,6 +33,7 @@ use std::task::Poll;
 
 use crate::Role;
 use crate::WebSocket;
+use crate::WebSocketError;
 
 fn sec_websocket_protocol(key: &[u8]) -> String {
   let mut sha1 = Sha1::new();
@@ -42,7 +43,7 @@ fn sec_websocket_protocol(key: &[u8]) -> String {
   STANDARD.encode(&result[..])
 }
 
-type Error = Box<dyn std::error::Error + Send + Sync>;
+type Error = WebSocketError;
 
 /// A future that resolves to a websocket stream when the associated HTTP upgrade completes.
 #[pin_project]
@@ -74,14 +75,14 @@ pub fn upgrade<B>(
   let key = request
     .headers()
     .get("Sec-WebSocket-Key")
-    .ok_or("Sec-WebSocket-Key header is missing")?;
+    .ok_or(WebSocketError::MissingSecWebSocketKey)?;
   if request
     .headers()
     .get("Sec-WebSocket-Version")
     .map(|v| v.as_bytes())
     != Some(b"13")
   {
-    return Err("Sec-WebSocket-Version must be 13".into());
+    return Err(WebSocketError::InvalidSecWebsocketVersion);
   }
 
   let response = Response::builder()

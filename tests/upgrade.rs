@@ -77,7 +77,7 @@ async fn hyper() {
 
 async fn upgrade_websocket(
   mut request: Request<Body>,
-) -> Result<Response<Body>, Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<Response<Body>, fastwebsockets::WebSocketError> {
   assert!(fastwebsockets::upgrade::is_upgrade_request(&request) == true);
 
   let (response, stream) = fastwebsockets::upgrade::upgrade(&mut request)?;

@@ -14,6 +14,7 @@
 
 use fastwebsockets::upgrade;
 use fastwebsockets::OpCode;
+use fastwebsockets::WebSocketError;
 use hyper::server::conn::Http;
 use hyper::service::service_fn;
 use hyper::Body;
@@ -23,7 +24,7 @@ use tokio::net::TcpListener;
 
 async fn handle_client(
   fut: upgrade::UpgradeFut,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<(), WebSocketError> {
   let mut ws = fastwebsockets::FragmentCollector::new(fut.await?);
 
   loop {
@@ -41,7 +42,7 @@ async fn handle_client(
 }
 async fn server_upgrade(
   mut req: Request<Body>,
-) -> Result<Response<Body>, Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<Response<Body>, WebSocketError> {
   let (response, fut) = upgrade::upgrade(&mut req)?;
 
   tokio::task::spawn(async move {
@@ -54,7 +55,7 @@ async fn server_upgrade(
 }
 
 #[tokio::main(flavor = "current_thread")]
-async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+async fn main() -> Result<(), WebSocketError> {
   let listener = TcpListener::bind("127.0.0.1:8080").await?;
   println!("Server started, listening on {}", "127.0.0.1:8080");
   loop {

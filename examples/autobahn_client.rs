@@ -23,9 +23,7 @@ use hyper::upgrade::Upgraded;
 use hyper::Body;
 use hyper::Request;
 use tokio::net::TcpStream;
-
-type Result<T> =
-  std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
+use anyhow::Result;
 
 struct SpawnExecutor;
 

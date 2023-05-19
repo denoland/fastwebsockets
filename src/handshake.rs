@@ -24,12 +24,12 @@ use base64::Engine;
 use tokio::io::AsyncRead;
 use tokio::io::AsyncWrite;
 
-use std::error::Error;
 use std::future::Future;
 use std::pin::Pin;
 
 use crate::Role;
 use crate::WebSocket;
+use crate::WebSocketError;
 
 /// Perform the client handshake.
 ///
@@ -44,10 +44,7 @@ use crate::WebSocket;
 /// use hyper::{Request, Body, upgrade::Upgraded, header::{UPGRADE, CONNECTION}};
 /// use tokio::net::TcpStream;
 /// use std::future::Future;
-///
-/// // Define a type alias for convenience
-/// type Result<T> =
-///   std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
+/// use anyhow::Result;
 ///
 /// async fn connect() -> Result<WebSocket<Upgraded>> {
 ///   let stream = TcpStream::connect("localhost:9001").await?;
@@ -86,7 +83,7 @@ pub async fn client<S, E>(
   executor: &E,
   request: Request<Body>,
   socket: S,
-) -> Result<(WebSocket<Upgraded>, Response<Body>), Box<dyn Error + Send + Sync>>
+) -> Result<(WebSocket<Upgraded>, Response<Body>), WebSocketError>
 where
   S: AsyncRead + AsyncWrite + Send + Unpin + 'static,
   E: hyper::rt::Executor<Pin<Box<dyn Future<Output = ()> + Send>>>,
@@ -121,9 +118,9 @@ pub fn generate_key() -> String {
 // https://github.com/snapview/tungstenite-rs/blob/314feea3055a93e585882fb769854a912a7e6dae/src/handshake/client.rs#L189
 fn verify(
   response: &Response<Body>,
-) -> Result<(), Box<dyn Error + Send + Sync>> {
+) -> Result<(), WebSocketError> {
   if response.status() != StatusCode::SWITCHING_PROTOCOLS {
-    return Err("Invalid status code".into());
+    return Err(WebSocketError::InvalidStatusCode);
   }
 
   let headers = response.headers();
@@ -134,7 +131,7 @@ fn verify(
     .map(|h| h.eq_ignore_ascii_case("websocket"))
     .unwrap_or(false)
   {
-    return Err("Invalid Upgrade header".into());
+    return Err(WebSocketError::InvalidUpgradeHeader);
   }
 
   if !headers
@@ -143,7 +140,7 @@ fn verify(
     .map(|h| h.eq_ignore_ascii_case("Upgrade"))
     .unwrap_or(false)
   {
-    return Err("Invalid Connection header".into());
+    return Err(WebSocketError::InvalidConnectionHeader);
   }
 
   Ok(())

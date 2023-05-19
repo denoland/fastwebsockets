@@ -25,10 +25,11 @@ use tokio_rustls::rustls;
 use tokio_rustls::rustls::Certificate;
 use tokio_rustls::rustls::PrivateKey;
 use tokio_rustls::TlsAcceptor;
+use anyhow::Result;
 
 async fn handle_client(
   fut: upgrade::UpgradeFut,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<()> {
   let mut ws = fut.await?;
   ws.set_writev(false);
   let mut ws = fastwebsockets::FragmentCollector::new(ws);
@@ -49,7 +50,7 @@ async fn handle_client(
 
 async fn server_upgrade(
   mut req: Request<Body>,
-) -> Result<Response<Body>, Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<Response<Body>> {
   let (response, fut) = upgrade::upgrade(&mut req)?;
 
   tokio::spawn(async move {
@@ -62,7 +63,7 @@ async fn server_upgrade(
 }
 
 fn tls_acceptor(
-) -> Result<TlsAcceptor, Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<TlsAcceptor> {
   static KEY: &[u8] = include_bytes!("./localhost.key");
   static CERT: &[u8] = include_bytes!("./localhost.crt");
 
@@ -82,7 +83,7 @@ fn tls_acceptor(
 }
 
 #[tokio::main(flavor = "current_thread")]
-async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+async fn main() -> Result<()> {
   let acceptor = tls_acceptor()?;
   let listener = TcpListener::bind("127.0.0.1:8080").await?;
   println!("Server started, listening on {}", "127.0.0.1:8080");
