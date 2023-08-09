@@ -42,8 +42,10 @@ impl SharedRecv {
 
   pub(crate) fn init(&mut self) {
     match self.inner.as_mut() {
-      Some(_) => {}
+      Some(_) => {
+      }
       None => {
+        dbg!("Initializing recv buffer");
         let mut vec = vec![0; RECV_SIZE];
         let ptr = vec.as_mut_ptr();
         std::mem::forget(vec);
