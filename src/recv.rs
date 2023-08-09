@@ -13,16 +13,21 @@
 // limitations under the License.
 
 use core::ptr::NonNull;
+use std::cell::RefCell;
 
 // 512 KiB
 const RECV_SIZE: usize = 524288;
-static mut RECV_BUF: SharedRecv = SharedRecv::null();
+
+thread_local! {
+    static RECV_BUF: RefCell<SharedRecv> = RefCell::new(SharedRecv::null());
+}
 
 pub(crate) fn init_once() -> &'static mut [u8] {
-  unsafe {
-    RECV_BUF.init();
-    RECV_BUF.get_mut()
-  }
+  RECV_BUF.with(|recv_buf| {
+    let mut recv_buf = recv_buf.borrow_mut();
+    recv_buf.init();
+    recv_buf.get_mut()
+  })
 }
 
 #[repr(transparent)]
@@ -39,6 +44,7 @@ impl SharedRecv {
     match self.inner.as_mut() {
       Some(_) => {}
       None => {
+        dbg!("Initializing recv buffer");
         let mut vec = vec![0; RECV_SIZE];
         let ptr = vec.as_mut_ptr();
         std::mem::forget(vec);
@@ -48,7 +54,7 @@ impl SharedRecv {
     }
   }
 
-  pub(crate) fn get_mut(&self) -> &mut [u8] {
+  pub(crate) fn get_mut(&self) -> &'static mut [u8] {
     unsafe {
       std::slice::from_raw_parts_mut(self.inner.unwrap().as_ptr(), RECV_SIZE)
     }
