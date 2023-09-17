@@ -400,7 +400,7 @@ impl ReadHalf {
     stream: &mut S,
   ) -> (Result<Option<Frame<'f>>, WebSocketError>, Option<Frame<'f>>)
   where
-    S: AsyncReadExt + AsyncWriteExt + Unpin,
+    S: AsyncReadExt + Unpin,
   {
     let mut frame = match self.parse_frame_header(stream).await {
       Ok(frame) => frame,

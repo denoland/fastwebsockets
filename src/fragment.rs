@@ -14,6 +14,7 @@
 
 use crate::error::WebSocketError;
 use crate::frame::Frame;
+use crate::recv::SharedRecv;
 use crate::OpCode;
 use crate::ReadHalf;
 use crate::WebSocket;
@@ -90,6 +91,7 @@ impl<'f, S> FragmentCollector<S> {
       read_half,
       write_half,
       fragments: Fragments::new(),
+      _marker: std::marker::PhantomData,
     }
   }
 
@@ -158,12 +160,7 @@ impl Fragments {
           if self.fragments.is_some() {
             return Err(WebSocketError::InvalidFragment);
           }
-          return Ok(Some(Frame::new(
-            true,
-            frame.opcode,
-            None,
-            frame.payload,
-          )));
+          return Ok(Some(Frame::new(true, frame.opcode, None, frame.payload)));
         } else {
           self.fragments = match frame.opcode {
             OpCode::Text => match utf8::decode(&frame.payload) {
