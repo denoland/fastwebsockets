@@ -92,7 +92,13 @@ impl<'f, S> FragmentCollector<S> {
     S: AsyncReadExt + AsyncWriteExt + Unpin,
   {
     loop {
-      let frame = self.ws.read_frame_inner().await?;
+      let (res, obligated_send) = self.ws.read_frame_inner().await;
+      if let Some(obligated_send) = obligated_send {
+        self.write_frame(obligated_send).await?;
+      }
+      let Some(frame) = res? else {
+        continue;
+      };
       if let Some(frame) = self.fragments.accumulate(frame)? {
         return Ok(frame);
       }

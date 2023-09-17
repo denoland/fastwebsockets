@@ -367,75 +367,86 @@ impl<'f, S> WebSocket<S> {
   where
     S: AsyncReadExt + AsyncWriteExt + Unpin,
   {
-    self.read_frame_inner().await
+    loop {
+      let (res, obligated_send) = self.read_frame_inner().await;
+      if let Some(frame) = obligated_send {
+        self.write_frame(frame).await?;
+      }
+      if let Some(frame) = res? {
+        break Ok(frame);
+      }
+    }
   }
 
+  /// Attempt to read a single frame from from the incoming stream, returning any send obligations if
+  /// `auto_close` or `auto_pong` are enabled. Callers to this function are obligated to send the
+  /// frame in the latter half of the tuple if one is specified.
+  ///
   /// XXX: Do not expose this method to the public API.
   /// Lifetime requirements for safe recv buffer use are not enforced.
   pub(crate) async fn read_frame_inner(
     &mut self,
-  ) -> Result<Frame<'f>, WebSocketError>
+  ) -> (Result<Option<Frame<'f>>, WebSocketError>, Option<Frame<'f>>)
   where
     S: AsyncReadExt + AsyncWriteExt + Unpin,
   {
-    loop {
-      let mut frame = self.parse_frame_header().await?;
-      if self.role == Role::Server && self.auto_apply_mask {
-        frame.unmask()
-      };
+    let mut frame = match self.parse_frame_header().await {
+      Ok(frame) => frame,
+      Err(e) => return (Err(e), None),
+    };
 
-      let write_half = &mut self.write_half;
-      if write_half.closed && frame.opcode != OpCode::Close {
-        return Err(WebSocketError::ConnectionClosed);
-      }
+    if self.role == Role::Server && self.auto_apply_mask {
+      frame.unmask()
+    };
 
-      match frame.opcode {
-        OpCode::Close if self.auto_close && !write_half.closed => {
-          match frame.payload.len() {
-            0 => {}
-            1 => return Err(WebSocketError::InvalidCloseFrame),
-            _ => {
-              let code = close::CloseCode::from(u16::from_be_bytes(
-                frame.payload[0..2].try_into().unwrap(),
-              ));
+    let write_half = &mut self.write_half;
+    if write_half.closed && frame.opcode != OpCode::Close {
+      return (Err(WebSocketError::ConnectionClosed), None);
+    }
 
-              #[cfg(feature = "simd")]
-              if simdutf8::basic::from_utf8(&frame.payload[2..]).is_err() {
-                return Err(WebSocketError::InvalidUTF8);
-              };
+    match frame.opcode {
+      OpCode::Close if self.auto_close && !write_half.closed => {
+        match frame.payload.len() {
+          0 => {}
+          1 => return (Err(WebSocketError::InvalidCloseFrame), None),
+          _ => {
+            let code = close::CloseCode::from(u16::from_be_bytes(
+              frame.payload[0..2].try_into().unwrap(),
+            ));
 
-              #[cfg(not(feature = "simd"))]
-              if std::str::from_utf8(&frame.payload[2..]).is_err() {
-                return Err(WebSocketError::InvalidUTF8);
-              };
+            #[cfg(feature = "simd")]
+            if simdutf8::basic::from_utf8(&frame.payload[2..]).is_err() {
+              return (Err(WebSocketError::InvalidUTF8), None);
+            };
 
-              if !code.is_allowed() {
-                let _ = self
-                  .write_frame(Frame::close(1002, &frame.payload[2..]))
-                  .await;
+            #[cfg(not(feature = "simd"))]
+            if std::str::from_utf8(&frame.payload[2..]).is_err() {
+              return (Err(WebSocketError::InvalidUTF8), None);
+            };
 
-                return Err(WebSocketError::InvalidCloseCode);
-              }
+            if !code.is_allowed() {
+              return (
+                Err(WebSocketError::InvalidCloseCode),
+                Some(Frame::close(1002, &frame.payload[2..])),
+              );
             }
-          };
-
-          let _ = self
-            .write_frame(Frame::close_raw(frame.payload.to_owned().into()))
-            .await;
-          break Ok(frame);
-        }
-        OpCode::Ping if self.auto_pong => {
-          self.write_frame(Frame::pong(frame.payload)).await?;
-        }
-        OpCode::Text => {
-          if frame.fin && !frame.is_utf8() {
-            break Err(WebSocketError::InvalidUTF8);
           }
+        };
 
-          break Ok(frame);
-        }
-        _ => break Ok(frame),
+        let obligated_send = Frame::close_raw(frame.payload.to_owned().into());
+        (Ok(Some(frame)), Some(obligated_send))
       }
+      OpCode::Ping if self.auto_pong => {
+        (Ok(None), Some(Frame::pong(frame.payload)))
+      }
+      OpCode::Text => {
+        if frame.fin && !frame.is_utf8() {
+          (Err(WebSocketError::InvalidUTF8), None)
+        } else {
+          (Ok(Some(frame)), None)
+        }
+      }
+      _ => (Ok(Some(frame)), None),
     }
   }
 
