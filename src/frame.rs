@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
 
 use core::ops::Deref;
@@ -285,7 +284,7 @@ impl<'f> Frame<'f> {
     stream: &mut S,
   ) -> Result<(), std::io::Error>
   where
-    S: AsyncReadExt + AsyncWriteExt + Unpin,
+    S: AsyncWriteExt + Unpin,
   {
     use std::io::IoSlice;
 

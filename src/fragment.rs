@@ -15,7 +15,9 @@
 use crate::error::WebSocketError;
 use crate::frame::Frame;
 use crate::OpCode;
+use crate::ReadHalf;
 use crate::WebSocket;
+use crate::WriteHalf;
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
 
@@ -68,7 +70,9 @@ impl Fragment {
 /// ```
 ///
 pub struct FragmentCollector<S> {
-  ws: WebSocket<S>,
+  stream: S,
+  read_half: ReadHalf,
+  write_half: WriteHalf,
   fragments: Fragments,
 }
 
@@ -78,8 +82,11 @@ impl<'f, S> FragmentCollector<S> {
   where
     S: AsyncReadExt + AsyncWriteExt + Unpin,
   {
+    let (stream, read_half, write_half) = ws.into_parts_internal();
     FragmentCollector {
-      ws,
+      stream,
+      read_half,
+      write_half,
       fragments: Fragments::new(),
     }
   }
@@ -92,8 +99,9 @@ impl<'f, S> FragmentCollector<S> {
     S: AsyncReadExt + AsyncWriteExt + Unpin,
   {
     loop {
-      let (res, obligated_send) = self.ws.read_frame_inner().await;
-      let is_closed = self.ws.is_write_half_closed();
+      let (res, obligated_send) =
+        self.read_half.read_frame_inner(&mut self.stream).await;
+      let is_closed = self.write_half.closed;
       if let Some(obligated_send) = obligated_send {
         if !is_closed {
           self.write_frame(obligated_send).await?;
@@ -119,7 +127,7 @@ impl<'f, S> FragmentCollector<S> {
   where
     S: AsyncReadExt + AsyncWriteExt + Unpin,
   {
-    self.ws.write_frame(frame).await?;
+    self.write_half.write_frame(&mut self.stream, frame).await?;
     Ok(())
   }
 }
