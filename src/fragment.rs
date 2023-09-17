@@ -74,6 +74,8 @@ pub struct FragmentCollector<S> {
   read_half: ReadHalf,
   write_half: WriteHalf,
   fragments: Fragments,
+  // !Sync marker
+  _marker: std::marker::PhantomData<SharedRecv>,
 }
 
 impl<'f, S> FragmentCollector<S> {
