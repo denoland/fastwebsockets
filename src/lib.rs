@@ -310,6 +310,34 @@ impl<'f, S> WebSocket<S> {
     self.write_half.auto_apply_mask = auto_apply_mask;
   }
 
+  /// Writes a frame to the stream.
+  ///
+  /// # Example
+  ///
+  /// ```
+  /// use fastwebsockets::{WebSocket, Frame, OpCode};
+  /// use tokio::net::TcpStream;
+  /// use anyhow::Result;
+  ///
+  /// async fn send(
+  ///   ws: &mut WebSocket<TcpStream>
+  /// ) -> Result<()> {
+  ///   let mut frame = Frame::binary(vec![0x01, 0x02, 0x03].into());
+  ///   ws.write_frame(frame).await?;
+  ///   Ok(())
+  /// }
+  /// ```
+  pub async fn write_frame(
+    &mut self,
+    frame: Frame<'f>,
+  ) -> Result<(), WebSocketError>
+  where
+    S: AsyncReadExt + AsyncWriteExt + Unpin,
+  {
+    self.write_half.write_frame(&mut self.stream, frame).await?;
+    Ok(())
+  }
+
   /// Reads a frame from the stream.
   ///
   /// This method will unmask the frame payload. For fragmented frames, use `FragmentCollector::read_frame`.
@@ -356,34 +384,6 @@ impl<'f, S> WebSocket<S> {
         break Ok(frame);
       }
     }
-  }
-
-  /// Writes a frame to the stream.
-  ///
-  /// # Example
-  ///
-  /// ```
-  /// use fastwebsockets::{WebSocket, Frame, OpCode};
-  /// use tokio::net::TcpStream;
-  /// use anyhow::Result;
-  ///
-  /// async fn send(
-  ///   ws: &mut WebSocket<TcpStream>
-  /// ) -> Result<()> {
-  ///   let mut frame = Frame::binary(vec![0x01, 0x02, 0x03].into());
-  ///   ws.write_frame(frame).await?;
-  ///   Ok(())
-  /// }
-  /// ```
-  pub async fn write_frame(
-    &mut self,
-    frame: Frame<'f>,
-  ) -> Result<(), WebSocketError>
-  where
-    S: AsyncReadExt + AsyncWriteExt + Unpin,
-  {
-    self.write_half.write_frame(&mut self.stream, frame).await?;
-    Ok(())
   }
 }
 
@@ -573,6 +573,7 @@ impl ReadHalf {
 }
 
 impl WriteHalf {
+  /// Writes a frame to the provided stream.
   pub async fn write_frame<'a, S>(
     &'a mut self,
     stream: &mut S,
