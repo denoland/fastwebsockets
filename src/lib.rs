@@ -174,31 +174,36 @@ pub use crate::frame::Payload;
 pub use crate::mask::unmask;
 use crate::recv::SharedRecv;
 
-#[derive(PartialEq)]
+#[derive(Copy, Clone, PartialEq)]
 pub enum Role {
   Server,
   Client,
 }
 
-struct WriteHalf<S> {
-  stream: S,
+pub(crate) struct WriteHalf {
+  role: Role,
   closed: bool,
+  vectored: bool,
+  auto_apply_mask: bool,
+  writev_threshold: usize,
   write_buffer: Vec<u8>,
+}
+
+pub(crate) struct ReadHalf {
+  role: Role,
+  spill: Option<Vec<u8>>,
+  auto_apply_mask: bool,
+  auto_close: bool,
+  auto_pong: bool,
+  writev_threshold: usize,
+  max_message_size: usize,
 }
 
 /// WebSocket protocol implementation over an async stream.
 pub struct WebSocket<S> {
-  write_half: WriteHalf<S>,
-  // Config
-  vectored: bool,
-  auto_close: bool,
-  auto_pong: bool,
-  max_message_size: usize,
-  writev_threshold: usize,
-  auto_apply_mask: bool,
-  role: Role,
-  // Read-half
-  spill: Option<Vec<u8>>,
+  stream: S,
+  write_half: WriteHalf,
+  read_half: ReadHalf,
   // !Sync marker
   _marker: std::marker::PhantomData<SharedRecv>,
 }
@@ -229,19 +234,24 @@ impl<'f, S> WebSocket<S> {
   {
     recv::init_once();
     Self {
+      stream,
       write_half: WriteHalf {
-        stream,
+        role,
         closed: false,
+        auto_apply_mask: true,
+        vectored: true,
+        writev_threshold: 1024,
         write_buffer: Vec::with_capacity(2),
       },
-      vectored: true,
-      auto_close: true,
-      auto_pong: true,
-      auto_apply_mask: true,
-      max_message_size: 64 << 20,
-      writev_threshold: 1024,
-      role,
-      spill: None,
+      read_half: ReadHalf {
+        role,
+        spill: None,
+        auto_apply_mask: true,
+        auto_close: true,
+        auto_pong: true,
+        writev_threshold: 1024,
+        max_message_size: 64 << 20,
+      },
       _marker: std::marker::PhantomData,
     }
   }
@@ -250,51 +260,57 @@ impl<'f, S> WebSocket<S> {
   #[inline]
   pub fn into_inner(self) -> S {
     // self.write_half.into_inner().stream
-    self.write_half.stream
+    self.stream
+  }
+
+  /// Consumes the `WebSocket` and returns the underlying stream.
+  #[inline]
+  pub(crate) fn into_parts_internal(self) -> (S, ReadHalf, WriteHalf) {
+    (self.stream, self.read_half, self.write_half)
   }
 
   /// Sets whether to use vectored writes. This option does not guarantee that vectored writes will be always used.
   ///
   /// Default: `true`
   pub fn set_writev(&mut self, vectored: bool) {
-    self.vectored = vectored;
+    self.write_half.vectored = vectored;
   }
 
   pub fn set_writev_threshold(&mut self, threshold: usize) {
-    self.writev_threshold = threshold;
+    self.read_half.writev_threshold = threshold;
+    self.write_half.writev_threshold = threshold;
   }
 
   /// Sets whether to automatically close the connection when a close frame is received. When set to `false`, the application will have to manually send close frames.
   ///
   /// Default: `true`
   pub fn set_auto_close(&mut self, auto_close: bool) {
-    self.auto_close = auto_close;
+    self.read_half.auto_close = auto_close;
   }
 
   /// Sets whether to automatically send a pong frame when a ping frame is received.
   ///
   /// Default: `true`
   pub fn set_auto_pong(&mut self, auto_pong: bool) {
-    self.auto_pong = auto_pong;
+    self.read_half.auto_pong = auto_pong;
   }
 
   /// Sets the maximum message size in bytes. If a message is received that is larger than this, the connection will be closed.
   ///
   /// Default: 64 MiB
   pub fn set_max_message_size(&mut self, max_message_size: usize) {
-    self.max_message_size = max_message_size;
+    self.read_half.max_message_size = max_message_size;
   }
 
   /// Sets whether to automatically apply the mask to the frame payload.
   ///
   /// Default: `true`
   pub fn set_auto_apply_mask(&mut self, auto_apply_mask: bool) {
-    self.auto_apply_mask = auto_apply_mask;
+    self.read_half.auto_apply_mask = auto_apply_mask;
+    self.write_half.auto_apply_mask = auto_apply_mask;
   }
 
   /// Writes a frame to the stream.
-  ///
-  /// This method will not mask the frame payload.
   ///
   /// # Example
   ///
@@ -311,29 +327,14 @@ impl<'f, S> WebSocket<S> {
   ///   Ok(())
   /// }
   /// ```
-  pub async fn write_frame<'a>(
-    &'a mut self,
-    mut frame: Frame<'a>,
+  pub async fn write_frame(
+    &mut self,
+    frame: Frame<'f>,
   ) -> Result<(), WebSocketError>
   where
     S: AsyncReadExt + AsyncWriteExt + Unpin,
   {
-    if self.role == Role::Client && self.auto_apply_mask {
-      frame.mask();
-    }
-
-    let write_half = &mut self.write_half;
-    if frame.opcode == OpCode::Close {
-      write_half.closed = true;
-    }
-
-    if self.vectored && frame.payload.len() > self.writev_threshold {
-      frame.writev(&mut write_half.stream).await?;
-    } else {
-      let text = frame.write(&mut write_half.write_buffer);
-      write_half.stream.write_all(text).await?;
-    }
-
+    self.write_half.write_frame(&mut self.stream, frame).await?;
     Ok(())
   }
 
@@ -367,83 +368,101 @@ impl<'f, S> WebSocket<S> {
   where
     S: AsyncReadExt + AsyncWriteExt + Unpin,
   {
-    self.read_frame_inner().await
-  }
-
-  /// XXX: Do not expose this method to the public API.
-  /// Lifetime requirements for safe recv buffer use are not enforced.
-  pub(crate) async fn read_frame_inner(
-    &mut self,
-  ) -> Result<Frame<'f>, WebSocketError>
-  where
-    S: AsyncReadExt + AsyncWriteExt + Unpin,
-  {
     loop {
-      let mut frame = self.parse_frame_header().await?;
-      if self.role == Role::Server && self.auto_apply_mask {
-        frame.unmask()
-      };
-
-      let write_half = &mut self.write_half;
-      if write_half.closed && frame.opcode != OpCode::Close {
-        return Err(WebSocketError::ConnectionClosed);
+      let (res, obligated_send) =
+        self.read_half.read_frame_inner(&mut self.stream).await;
+      let is_closed = self.write_half.closed;
+      if let Some(frame) = obligated_send {
+        if !is_closed {
+          self.write_half.write_frame(&mut self.stream, frame).await?;
+        }
       }
-
-      match frame.opcode {
-        OpCode::Close if self.auto_close && !write_half.closed => {
-          match frame.payload.len() {
-            0 => {}
-            1 => return Err(WebSocketError::InvalidCloseFrame),
-            _ => {
-              let code = close::CloseCode::from(u16::from_be_bytes(
-                frame.payload[0..2].try_into().unwrap(),
-              ));
-
-              #[cfg(feature = "simd")]
-              if simdutf8::basic::from_utf8(&frame.payload[2..]).is_err() {
-                return Err(WebSocketError::InvalidUTF8);
-              };
-
-              #[cfg(not(feature = "simd"))]
-              if std::str::from_utf8(&frame.payload[2..]).is_err() {
-                return Err(WebSocketError::InvalidUTF8);
-              };
-
-              if !code.is_allowed() {
-                let _ = self
-                  .write_frame(Frame::close(1002, &frame.payload[2..]))
-                  .await;
-
-                return Err(WebSocketError::InvalidCloseCode);
-              }
-            }
-          };
-
-          let _ = self
-            .write_frame(Frame::close_raw(frame.payload.to_owned().into()))
-            .await;
-          break Ok(frame);
+      if let Some(frame) = res? {
+        if is_closed && frame.opcode != OpCode::Close {
+          return Err(WebSocketError::ConnectionClosed);
         }
-        OpCode::Ping if self.auto_pong => {
-          self.write_frame(Frame::pong(frame.payload)).await?;
-        }
-        OpCode::Text => {
-          if frame.fin && !frame.is_utf8() {
-            break Err(WebSocketError::InvalidUTF8);
-          }
-
-          break Ok(frame);
-        }
-        _ => break Ok(frame),
+        break Ok(frame);
       }
     }
   }
+}
 
-  async fn parse_frame_header<'a>(
+impl ReadHalf {
+  /// Attempt to read a single frame from from the incoming stream, returning any send obligations if
+  /// `auto_close` or `auto_pong` are enabled. Callers to this function are obligated to send the
+  /// frame in the latter half of the tuple if one is specified, unless the write half of this socket
+  /// has been closed.
+  ///
+  /// XXX: Do not expose this method to the public API.
+  /// Lifetime requirements for safe recv buffer use are not enforced.
+  pub(crate) async fn read_frame_inner<'f, S>(
     &mut self,
+    stream: &mut S,
+  ) -> (Result<Option<Frame<'f>>, WebSocketError>, Option<Frame<'f>>)
+  where
+    S: AsyncReadExt + Unpin,
+  {
+    let mut frame = match self.parse_frame_header(stream).await {
+      Ok(frame) => frame,
+      Err(e) => return (Err(e), None),
+    };
+
+    if self.role == Role::Server && self.auto_apply_mask {
+      frame.unmask()
+    };
+
+    match frame.opcode {
+      OpCode::Close if self.auto_close => {
+        match frame.payload.len() {
+          0 => {}
+          1 => return (Err(WebSocketError::InvalidCloseFrame), None),
+          _ => {
+            let code = close::CloseCode::from(u16::from_be_bytes(
+              frame.payload[0..2].try_into().unwrap(),
+            ));
+
+            #[cfg(feature = "simd")]
+            if simdutf8::basic::from_utf8(&frame.payload[2..]).is_err() {
+              return (Err(WebSocketError::InvalidUTF8), None);
+            };
+
+            #[cfg(not(feature = "simd"))]
+            if std::str::from_utf8(&frame.payload[2..]).is_err() {
+              return (Err(WebSocketError::InvalidUTF8), None);
+            };
+
+            if !code.is_allowed() {
+              return (
+                Err(WebSocketError::InvalidCloseCode),
+                Some(Frame::close(1002, &frame.payload[2..])),
+              );
+            }
+          }
+        };
+
+        let obligated_send = Frame::close_raw(frame.payload.to_owned().into());
+        (Ok(Some(frame)), Some(obligated_send))
+      }
+      OpCode::Ping if self.auto_pong => {
+        (Ok(None), Some(Frame::pong(frame.payload)))
+      }
+      OpCode::Text => {
+        if frame.fin && !frame.is_utf8() {
+          (Err(WebSocketError::InvalidUTF8), None)
+        } else {
+          (Ok(Some(frame)), None)
+        }
+      }
+      _ => (Ok(Some(frame)), None),
+    }
+  }
+
+  async fn parse_frame_header<'a, S>(
+    &mut self,
+    stream: &mut S,
   ) -> Result<Frame<'a>, WebSocketError>
   where
-    S: AsyncReadExt + AsyncWriteExt + Unpin,
+    S: AsyncReadExt + Unpin,
   {
     macro_rules! eof {
       ($n:expr) => {{
@@ -455,7 +474,6 @@ impl<'f, S> WebSocket<S> {
       }};
     }
 
-    let stream = &mut self.write_half.stream;
     let head = recv::init_once();
     let mut nread = 0;
 
@@ -551,6 +569,35 @@ impl<'f, S> WebSocket<S> {
     };
     let frame = Frame::new(fin, opcode, mask, payload);
     Ok(frame)
+  }
+}
+
+impl WriteHalf {
+  /// Writes a frame to the provided stream.
+  pub async fn write_frame<'a, S>(
+    &'a mut self,
+    stream: &mut S,
+    mut frame: Frame<'a>,
+  ) -> Result<(), WebSocketError>
+  where
+    S: AsyncWriteExt + Unpin,
+  {
+    if self.role == Role::Client && self.auto_apply_mask {
+      frame.mask();
+    }
+
+    if frame.opcode == OpCode::Close {
+      self.closed = true;
+    }
+
+    if self.vectored && frame.payload.len() > self.writev_threshold {
+      frame.writev(stream).await?;
+    } else {
+      let text = frame.write(&mut self.write_buffer);
+      stream.write_all(text).await?;
+    }
+
+    Ok(())
   }
 }
 
