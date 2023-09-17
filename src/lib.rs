@@ -246,6 +246,10 @@ impl<'f, S> WebSocket<S> {
     }
   }
 
+  pub(crate) fn is_write_half_closed(&self) -> bool {
+    self.write_half.closed
+  }
+
   /// Consumes the `WebSocket` and returns the underlying stream.
   #[inline]
   pub fn into_inner(self) -> S {
@@ -369,10 +373,16 @@ impl<'f, S> WebSocket<S> {
   {
     loop {
       let (res, obligated_send) = self.read_frame_inner().await;
+      let is_closed = self.write_half.closed;
       if let Some(frame) = obligated_send {
-        self.write_frame(frame).await?;
+        if !is_closed {
+          self.write_frame(frame).await?;
+        }
       }
       if let Some(frame) = res? {
+        if is_closed && frame.opcode != OpCode::Close {
+          return Err(WebSocketError::ConnectionClosed);
+        }
         break Ok(frame);
       }
     }
@@ -380,7 +390,8 @@ impl<'f, S> WebSocket<S> {
 
   /// Attempt to read a single frame from from the incoming stream, returning any send obligations if
   /// `auto_close` or `auto_pong` are enabled. Callers to this function are obligated to send the
-  /// frame in the latter half of the tuple if one is specified.
+  /// frame in the latter half of the tuple if one is specified, unless the write half of this socket
+  /// has been closed.
   ///
   /// XXX: Do not expose this method to the public API.
   /// Lifetime requirements for safe recv buffer use are not enforced.
@@ -399,13 +410,8 @@ impl<'f, S> WebSocket<S> {
       frame.unmask()
     };
 
-    let write_half = &mut self.write_half;
-    if write_half.closed && frame.opcode != OpCode::Close {
-      return (Err(WebSocketError::ConnectionClosed), None);
-    }
-
     match frame.opcode {
-      OpCode::Close if self.auto_close && !write_half.closed => {
+      OpCode::Close if self.auto_close => {
         match frame.payload.len() {
           0 => {}
           1 => return (Err(WebSocketError::InvalidCloseFrame), None),

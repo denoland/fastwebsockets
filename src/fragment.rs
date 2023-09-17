@@ -93,12 +93,18 @@ impl<'f, S> FragmentCollector<S> {
   {
     loop {
       let (res, obligated_send) = self.ws.read_frame_inner().await;
+      let is_closed = self.ws.is_write_half_closed();
       if let Some(obligated_send) = obligated_send {
-        self.write_frame(obligated_send).await?;
+        if !is_closed {
+          self.write_frame(obligated_send).await?;
+        }
       }
       let Some(frame) = res? else {
         continue;
       };
+      if is_closed && frame.opcode != OpCode::Close {
+        return Err(WebSocketError::ConnectionClosed);
+      }
       if let Some(frame) = self.fragments.accumulate(frame)? {
         return Ok(frame);
       }
