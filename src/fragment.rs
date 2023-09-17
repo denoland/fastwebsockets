@@ -160,7 +160,7 @@ impl Fragments {
             true,
             frame.opcode,
             None,
-            frame.payload.into(),
+            frame.payload,
           )));
         } else {
           self.fragments = match frame.opcode {
