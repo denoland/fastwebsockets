@@ -180,15 +180,15 @@ pub enum Role {
   Client,
 }
 
-struct WriteHalf<S> {
-  stream: S,
+struct WriteHalf {
   closed: bool,
   write_buffer: Vec<u8>,
 }
 
 /// WebSocket protocol implementation over an async stream.
 pub struct WebSocket<S> {
-  write_half: WriteHalf<S>,
+  stream: S,
+  write_half: WriteHalf,
   // Config
   vectored: bool,
   auto_close: bool,
@@ -229,8 +229,8 @@ impl<'f, S> WebSocket<S> {
   {
     recv::init_once();
     Self {
+      stream,
       write_half: WriteHalf {
-        stream,
         closed: false,
         write_buffer: Vec::with_capacity(2),
       },
@@ -250,7 +250,7 @@ impl<'f, S> WebSocket<S> {
   #[inline]
   pub fn into_inner(self) -> S {
     // self.write_half.into_inner().stream
-    self.write_half.stream
+    self.stream
   }
 
   /// Sets whether to use vectored writes. This option does not guarantee that vectored writes will be always used.
@@ -328,10 +328,10 @@ impl<'f, S> WebSocket<S> {
     }
 
     if self.vectored && frame.payload.len() > self.writev_threshold {
-      frame.writev(&mut write_half.stream).await?;
+      frame.writev(&mut self.stream).await?;
     } else {
       let text = frame.write(&mut write_half.write_buffer);
-      write_half.stream.write_all(text).await?;
+      self.stream.write_all(text).await?;
     }
 
     Ok(())
@@ -466,7 +466,7 @@ impl<'f, S> WebSocket<S> {
       }};
     }
 
-    let stream = &mut self.write_half.stream;
+    let stream = &mut self.stream;
     let head = recv::init_once();
     let mut nread = 0;
 
