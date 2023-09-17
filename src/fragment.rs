@@ -69,8 +69,7 @@ impl Fragment {
 ///
 pub struct FragmentCollector<S> {
   ws: WebSocket<S>,
-  fragments: Option<Fragment>,
-  opcode: OpCode,
+  fragments: Fragments,
 }
 
 impl<'f, S> FragmentCollector<S> {
@@ -81,8 +80,7 @@ impl<'f, S> FragmentCollector<S> {
   {
     FragmentCollector {
       ws,
-      fragments: None,
-      opcode: OpCode::Close,
+      fragments: Fragments::new(),
     }
   }
 
@@ -95,105 +93,8 @@ impl<'f, S> FragmentCollector<S> {
   {
     loop {
       let frame = self.ws.read_frame_inner().await?;
-      match frame.opcode {
-        OpCode::Text | OpCode::Binary => {
-          if frame.fin {
-            if self.fragments.is_some() {
-              return Err(WebSocketError::InvalidFragment);
-            }
-            return Ok(Frame::new(
-              true,
-              frame.opcode,
-              None,
-              frame.payload.into(),
-            ));
-          } else {
-            self.fragments = match frame.opcode {
-              OpCode::Text => match utf8::decode(&frame.payload) {
-                Ok(text) => {
-                  Some(Fragment::Text(None, text.as_bytes().to_vec()))
-                }
-                Err(utf8::DecodeError::Incomplete {
-                  valid_prefix,
-                  incomplete_suffix,
-                }) => Some(Fragment::Text(
-                  Some(incomplete_suffix),
-                  valid_prefix.as_bytes().to_vec(),
-                )),
-                Err(utf8::DecodeError::Invalid { .. }) => {
-                  return Err(WebSocketError::InvalidUTF8);
-                }
-              },
-              OpCode::Binary => Some(Fragment::Binary(frame.payload.into())),
-              _ => unreachable!(),
-            };
-            self.opcode = frame.opcode;
-          }
-        }
-        OpCode::Continuation => match self.fragments.as_mut() {
-          None => {
-            return Err(WebSocketError::InvalidContinuationFrame);
-          }
-          Some(Fragment::Text(data, input)) => {
-            let mut tail = &frame.payload[..];
-            if let Some(mut incomplete) = data.take() {
-              if let Some((result, rest)) =
-                incomplete.try_complete(&frame.payload)
-              {
-                tail = rest;
-                match result {
-                  Ok(text) => {
-                    input.extend_from_slice(text.as_bytes());
-                  }
-                  Err(_) => {
-                    return Err(WebSocketError::InvalidUTF8);
-                  }
-                }
-              } else {
-                tail = &[];
-                data.replace(incomplete);
-              }
-            }
-
-            match utf8::decode(tail) {
-              Ok(text) => {
-                input.extend_from_slice(text.as_bytes());
-              }
-              Err(utf8::DecodeError::Incomplete {
-                valid_prefix,
-                incomplete_suffix,
-              }) => {
-                input.extend_from_slice(valid_prefix.as_bytes());
-                *data = Some(incomplete_suffix);
-              }
-              Err(utf8::DecodeError::Invalid { valid_prefix, .. }) => {
-                input.extend_from_slice(valid_prefix.as_bytes());
-                return Err(WebSocketError::InvalidUTF8);
-              }
-            }
-
-            if frame.fin {
-              return Ok(Frame::new(
-                true,
-                self.opcode,
-                None,
-                self.fragments.take().unwrap().take_buffer().into(),
-              ));
-            }
-          }
-          Some(Fragment::Binary(data)) => {
-            data.extend_from_slice(&frame.payload);
-            if frame.fin {
-              return Ok(Frame::new(
-                true,
-                self.opcode,
-                None,
-                self.fragments.take().unwrap().take_buffer().into(),
-              ));
-            }
-          }
-        },
-        _ => return Ok(frame),
+      if let Some(frame) = self.fragments.accumulate(frame)? {
+        return Ok(frame);
       }
     }
   }
@@ -208,5 +109,126 @@ impl<'f, S> FragmentCollector<S> {
   {
     self.ws.write_frame(frame).await?;
     Ok(())
+  }
+}
+
+/// Accumulates potentially fragmented [`Frame`]s to defragment the incoming WebSocket stream.
+struct Fragments {
+  fragments: Option<Fragment>,
+  opcode: OpCode,
+}
+
+impl Fragments {
+  pub fn new() -> Self {
+    Self {
+      fragments: None,
+      opcode: OpCode::Close,
+    }
+  }
+
+  pub fn accumulate<'f>(
+    &mut self,
+    frame: Frame<'f>,
+  ) -> Result<Option<Frame<'f>>, WebSocketError> {
+    match frame.opcode {
+      OpCode::Text | OpCode::Binary => {
+        if frame.fin {
+          if self.fragments.is_some() {
+            return Err(WebSocketError::InvalidFragment);
+          }
+          return Ok(Some(Frame::new(
+            true,
+            frame.opcode,
+            None,
+            frame.payload.into(),
+          )));
+        } else {
+          self.fragments = match frame.opcode {
+            OpCode::Text => match utf8::decode(&frame.payload) {
+              Ok(text) => Some(Fragment::Text(None, text.as_bytes().to_vec())),
+              Err(utf8::DecodeError::Incomplete {
+                valid_prefix,
+                incomplete_suffix,
+              }) => Some(Fragment::Text(
+                Some(incomplete_suffix),
+                valid_prefix.as_bytes().to_vec(),
+              )),
+              Err(utf8::DecodeError::Invalid { .. }) => {
+                return Err(WebSocketError::InvalidUTF8);
+              }
+            },
+            OpCode::Binary => Some(Fragment::Binary(frame.payload.into())),
+            _ => unreachable!(),
+          };
+          self.opcode = frame.opcode;
+        }
+      }
+      OpCode::Continuation => match self.fragments.as_mut() {
+        None => {
+          return Err(WebSocketError::InvalidContinuationFrame);
+        }
+        Some(Fragment::Text(data, input)) => {
+          let mut tail = &frame.payload[..];
+          if let Some(mut incomplete) = data.take() {
+            if let Some((result, rest)) =
+              incomplete.try_complete(&frame.payload)
+            {
+              tail = rest;
+              match result {
+                Ok(text) => {
+                  input.extend_from_slice(text.as_bytes());
+                }
+                Err(_) => {
+                  return Err(WebSocketError::InvalidUTF8);
+                }
+              }
+            } else {
+              tail = &[];
+              data.replace(incomplete);
+            }
+          }
+
+          match utf8::decode(tail) {
+            Ok(text) => {
+              input.extend_from_slice(text.as_bytes());
+            }
+            Err(utf8::DecodeError::Incomplete {
+              valid_prefix,
+              incomplete_suffix,
+            }) => {
+              input.extend_from_slice(valid_prefix.as_bytes());
+              *data = Some(incomplete_suffix);
+            }
+            Err(utf8::DecodeError::Invalid { valid_prefix, .. }) => {
+              input.extend_from_slice(valid_prefix.as_bytes());
+              return Err(WebSocketError::InvalidUTF8);
+            }
+          }
+
+          if frame.fin {
+            return Ok(Some(Frame::new(
+              true,
+              self.opcode,
+              None,
+              self.fragments.take().unwrap().take_buffer().into(),
+            )));
+          }
+        }
+        Some(Fragment::Binary(data)) => {
+          data.extend_from_slice(&frame.payload);
+          if frame.fin {
+            return Ok(Some(Frame::new(
+              true,
+              self.opcode,
+              None,
+              self.fragments.take().unwrap().take_buffer().into(),
+            )));
+          }
+        }
+      },
+      _ => return Ok(Some(frame)),
+    }
+
+    Ok(None)
   }
 }
