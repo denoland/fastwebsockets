@@ -162,17 +162,23 @@ mod recv;
 #[cfg_attr(docsrs, doc(cfg(feature = "upgrade")))]
 pub mod upgrade;
 
+use std::future::Future;
+
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
 
 pub use crate::close::CloseCode;
 pub use crate::error::WebSocketError;
 pub use crate::fragment::FragmentCollector;
+pub use crate::fragment::FragmentCollectorRead;
 pub use crate::frame::Frame;
 pub use crate::frame::OpCode;
 pub use crate::frame::Payload;
 pub use crate::mask::unmask;
 use crate::recv::SharedRecv;
+
+#[derive(Copy, Clone, Default)]
+struct UnsendMarker(std::marker::PhantomData<SharedRecv>);
 
 #[derive(Copy, Clone, PartialEq)]
 pub enum Role {
@@ -199,13 +205,145 @@ pub(crate) struct ReadHalf {
   max_message_size: usize,
 }
 
+pub struct WebSocketRead<S> {
+  stream: S,
+  read_half: ReadHalf,
+  _marker: UnsendMarker,
+}
+
+pub struct WebSocketWrite<S> {
+  stream: S,
+  write_half: WriteHalf,
+  _marker: UnsendMarker,
+}
+
+/// Create a split `WebSocketRead`/`WebSocketWrite` pair from a stream that has already completed the WebSocket handshake.
+pub fn after_handshake_split<R, W>(
+  read: R,
+  write: W,
+  role: Role,
+) -> (WebSocketRead<R>, WebSocketWrite<W>)
+where
+  R: AsyncWriteExt + Unpin,
+  W: AsyncWriteExt + Unpin,
+{
+  (
+    WebSocketRead {
+      stream: read,
+      read_half: ReadHalf::after_handshake(role),
+      _marker: UnsendMarker::default(),
+    },
+    WebSocketWrite {
+      stream: write,
+      write_half: WriteHalf::after_handshake(role),
+      _marker: UnsendMarker::default(),
+    },
+  )
+}
+
+impl<'f, S> WebSocketRead<S> {
+  /// Consumes the `WebSocketRead` and returns the underlying stream.
+  #[inline]
+  pub(crate) fn into_parts_internal(self) -> (S, ReadHalf) {
+    (self.stream, self.read_half)
+  }
+
+  pub fn set_writev_threshold(&mut self, threshold: usize) {
+    self.read_half.writev_threshold = threshold;
+  }
+
+  /// Sets whether to automatically close the connection when a close frame is received. When set to `false`, the application will have to manually send close frames.
+  ///
+  /// Default: `true`
+  pub fn set_auto_close(&mut self, auto_close: bool) {
+    self.read_half.auto_close = auto_close;
+  }
+
+  /// Sets whether to automatically send a pong frame when a ping frame is received.
+  ///
+  /// Default: `true`
+  pub fn set_auto_pong(&mut self, auto_pong: bool) {
+    self.read_half.auto_pong = auto_pong;
+  }
+
+  /// Sets the maximum message size in bytes. If a message is received that is larger than this, the connection will be closed.
+  ///
+  /// Default: 64 MiB
+  pub fn set_max_message_size(&mut self, max_message_size: usize) {
+    self.read_half.max_message_size = max_message_size;
+  }
+
+  /// Sets whether to automatically apply the mask to the frame payload.
+  ///
+  /// Default: `true`
+  pub fn set_auto_apply_mask(&mut self, auto_apply_mask: bool) {
+    self.read_half.auto_apply_mask = auto_apply_mask;
+  }
+
+  /// Reads a frame from the stream.
+  pub async fn read_frame<R, E>(
+    &mut self,
+    send_fn: &mut impl FnMut(Frame<'f>) -> R,
+  ) -> Result<Frame, WebSocketError>
+  where
+    S: AsyncReadExt + Unpin,
+    E: Into<Box<dyn std::error::Error + Send + Sync + 'static>>,
+    R: Future<Output = Result<(), E>>,
+  {
+    loop {
+      let (res, obligated_send) =
+        self.read_half.read_frame_inner(&mut self.stream).await;
+      if let Some(frame) = obligated_send {
+        let res = send_fn(frame).await;
+        res.map_err(|e| WebSocketError::SendError(e.into()))?;
+      }
+      if let Some(frame) = res? {
+        break Ok(frame);
+      }
+    }
+  }
+}
+
+impl<'f, S> WebSocketWrite<S> {
+  /// Sets whether to use vectored writes. This option does not guarantee that vectored writes will be always used.
+  ///
+  /// Default: `true`
+  pub fn set_writev(&mut self, vectored: bool) {
+    self.write_half.vectored = vectored;
+  }
+
+  pub fn set_writev_threshold(&mut self, threshold: usize) {
+    self.write_half.writev_threshold = threshold;
+  }
+
+  /// Sets whether to automatically apply the mask to the frame payload.
+  ///
+  /// Default: `true`
+  pub fn set_auto_apply_mask(&mut self, auto_apply_mask: bool) {
+    self.write_half.auto_apply_mask = auto_apply_mask;
+  }
+
+  pub fn is_closed(&self) -> bool {
+    self.write_half.closed
+  }
+
+  pub async fn write_frame(
+    &mut self,
+    frame: Frame<'f>,
+  ) -> Result<(), WebSocketError>
+  where
+    S: AsyncWriteExt + Unpin,
+  {
+    self.write_half.write_frame(&mut self.stream, frame).await
+  }
+}
+
 /// WebSocket protocol implementation over an async stream.
 pub struct WebSocket<S> {
   stream: S,
   write_half: WriteHalf,
   read_half: ReadHalf,
-  // !Sync marker
-  _marker: std::marker::PhantomData<SharedRecv>,
+  _marker: UnsendMarker,
 }
 
 impl<'f, S> WebSocket<S> {
@@ -235,25 +373,35 @@ impl<'f, S> WebSocket<S> {
     recv::init_once();
     Self {
       stream,
-      write_half: WriteHalf {
-        role,
-        closed: false,
-        auto_apply_mask: true,
-        vectored: true,
-        writev_threshold: 1024,
-        write_buffer: Vec::with_capacity(2),
-      },
-      read_half: ReadHalf {
-        role,
-        spill: None,
-        auto_apply_mask: true,
-        auto_close: true,
-        auto_pong: true,
-        writev_threshold: 1024,
-        max_message_size: 64 << 20,
-      },
-      _marker: std::marker::PhantomData,
+      write_half: WriteHalf::after_handshake(role),
+      read_half: ReadHalf::after_handshake(role),
+      _marker: UnsendMarker::default(),
     }
+  }
+
+  pub fn split<R, W>(
+    self,
+    split_fn: impl Fn(S) -> (R, W),
+  ) -> (WebSocketRead<R>, WebSocketWrite<W>)
+  where
+    S: AsyncReadExt + AsyncWriteExt + Unpin,
+    R: AsyncReadExt + Unpin,
+    W: AsyncWriteExt + Unpin,
+  {
+    let (stream, read, write) = self.into_parts_internal();
+    let (r, w) = split_fn(stream);
+    (
+      WebSocketRead {
+        stream: r,
+        read_half: read,
+        _marker: UnsendMarker::default(),
+      },
+      WebSocketWrite {
+        stream: w,
+        write_half: write,
+        _marker: UnsendMarker::default(),
+      },
+    )
   }
 
   /// Consumes the `WebSocket` and returns the underlying stream.
@@ -308,6 +456,10 @@ impl<'f, S> WebSocket<S> {
   pub fn set_auto_apply_mask(&mut self, auto_apply_mask: bool) {
     self.read_half.auto_apply_mask = auto_apply_mask;
     self.write_half.auto_apply_mask = auto_apply_mask;
+  }
+
+  pub fn is_closed(&self) -> bool {
+    self.write_half.closed
   }
 
   /// Writes a frame to the stream.
@@ -388,6 +540,18 @@ impl<'f, S> WebSocket<S> {
 }
 
 impl ReadHalf {
+  pub fn after_handshake(role: Role) -> Self {
+    Self {
+      role,
+      spill: None,
+      auto_apply_mask: true,
+      auto_close: true,
+      auto_pong: true,
+      writev_threshold: 1024,
+      max_message_size: 64 << 20,
+    }
+  }
+
   /// Attempt to read a single frame from from the incoming stream, returning any send obligations if
   /// `auto_close` or `auto_pong` are enabled. Callers to this function are obligated to send the
   /// frame in the latter half of the tuple if one is specified, unless the write half of this socket
@@ -573,6 +737,17 @@ impl ReadHalf {
 }
 
 impl WriteHalf {
+  pub fn after_handshake(role: Role) -> Self {
+    Self {
+      role,
+      closed: false,
+      auto_apply_mask: true,
+      vectored: true,
+      writev_threshold: 1024,
+      write_buffer: Vec::with_capacity(2),
+    }
+  }
+
   /// Writes a frame to the provided stream.
   pub async fn write_frame<'a, S>(
     &'a mut self,
@@ -588,6 +763,8 @@ impl WriteHalf {
 
     if frame.opcode == OpCode::Close {
       self.closed = true;
+    } else if self.closed {
+      return Err(WebSocketError::ConnectionClosed);
     }
 
     if self.vectored && frame.payload.len() > self.writev_threshold {

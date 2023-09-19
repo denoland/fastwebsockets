@@ -41,4 +41,6 @@ pub enum WebSocketError {
   #[cfg(feature = "upgrade")]
   #[error(transparent)]
   HTTPError(#[from] hyper::Error),
+  #[error("Failed to send frame")]
+  SendError(#[from] Box<dyn std::error::Error + Send + Sync + 'static>),
 }
