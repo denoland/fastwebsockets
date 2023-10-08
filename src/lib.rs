@@ -517,7 +517,7 @@ impl ReadHalf {
         _ => unreachable!(),
       }
     } else {
-      usize::from(length_code)
+      length_code as usize
     };
 
     let mask = match masked {
