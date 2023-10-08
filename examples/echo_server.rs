@@ -52,20 +52,26 @@ async fn server_upgrade(
   Ok(response)
 }
 
-#[tokio::main(flavor = "current_thread")]
-async fn main() -> Result<(), WebSocketError> {
-  let listener = TcpListener::bind("127.0.0.1:8080").await?;
-  println!("Server started, listening on {}", "127.0.0.1:8080");
-  loop {
-    let (stream, _) = listener.accept().await?;
-    println!("Client connected");
-    tokio::spawn(async move {
-      let conn_fut = Http::new()
-        .serve_connection(stream, service_fn(server_upgrade))
-        .with_upgrades();
-      if let Err(e) = conn_fut.await {
-        println!("An error occurred: {:?}", e);
-      }
-    });
-  }
+fn main() -> Result<(), WebSocketError> {
+  let rt = tokio::runtime::Builder::new_current_thread()
+    .enable_io()
+    .build()
+    .unwrap();
+
+  rt.block_on(async move {
+    let listener = TcpListener::bind("127.0.0.1:8080").await?;
+    println!("Server started, listening on {}", "127.0.0.1:8080");
+    loop {
+      let (stream, _) = listener.accept().await?;
+      println!("Client connected");
+      tokio::spawn(async move {
+        let conn_fut = Http::new()
+          .serve_connection(stream, service_fn(server_upgrade))
+          .with_upgrades();
+        if let Err(e) = conn_fut.await {
+          println!("An error occurred: {:?}", e);
+        }
+      });
+    }
+  })
 }
