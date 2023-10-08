@@ -22,7 +22,6 @@ name = "tls_client"
 path = "examples/tls_client.rs"
 required-features = ["upgrade"]
 
-
 [dependencies]
 tokio = { version = "1.25.0",  default-features = false, features = ["io-util"] }
 simdutf8 = { version = "0.1.4", optional = true }
@@ -54,7 +53,8 @@ webpki-roots = "0.23.0"
 name = "unmask"
 harness = false
 
-[profile.release-debug-info]
+# Build release with debug symbols: cargo build --profile=release-with-debug
+[profile.release-with-debug]
 inherits = "release"
 debug = true
 
