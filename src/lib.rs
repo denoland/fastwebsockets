@@ -162,6 +162,7 @@ mod recv;
 #[cfg_attr(docsrs, doc(cfg(feature = "upgrade")))]
 pub mod upgrade;
 
+#[cfg(feature="unstable-split")]
 use std::future::Future;
 
 use tokio::io::AsyncReadExt;
@@ -170,6 +171,7 @@ use tokio::io::AsyncWriteExt;
 pub use crate::close::CloseCode;
 pub use crate::error::WebSocketError;
 pub use crate::fragment::FragmentCollector;
+#[cfg(feature="unstable-split")]
 pub use crate::fragment::FragmentCollectorRead;
 pub use crate::frame::Frame;
 pub use crate::frame::OpCode;
@@ -205,18 +207,21 @@ pub(crate) struct ReadHalf {
   max_message_size: usize,
 }
 
+#[cfg(feature="unstable-split")]
 pub struct WebSocketRead<S> {
   stream: S,
   read_half: ReadHalf,
   _marker: UnsendMarker,
 }
 
+#[cfg(feature="unstable-split")]
 pub struct WebSocketWrite<S> {
   stream: S,
   write_half: WriteHalf,
   _marker: UnsendMarker,
 }
 
+#[cfg(feature="unstable-split")]
 /// Create a split `WebSocketRead`/`WebSocketWrite` pair from a stream that has already completed the WebSocket handshake.
 pub fn after_handshake_split<R, W>(
   read: R,
@@ -241,6 +246,7 @@ where
   )
 }
 
+#[cfg(feature="unstable-split")]
 impl<'f, S> WebSocketRead<S> {
   /// Consumes the `WebSocketRead` and returns the underlying stream.
   #[inline]
@@ -304,6 +310,7 @@ impl<'f, S> WebSocketRead<S> {
   }
 }
 
+#[cfg(feature="unstable-split")]
 impl<'f, S> WebSocketWrite<S> {
   /// Sets whether to use vectored writes. This option does not guarantee that vectored writes will be always used.
   ///
@@ -379,6 +386,7 @@ impl<'f, S> WebSocket<S> {
     }
   }
 
+  #[cfg(feature="unstable-split")]
   pub fn split<R, W>(
     self,
     split_fn: impl Fn(S) -> (R, W),
