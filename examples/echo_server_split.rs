@@ -30,9 +30,8 @@ async fn handle_client(fut: upgrade::UpgradeFut) -> Result<(), WebSocketError> {
   loop {
     // Empty send_fn is fine because the benchmark does not create obligated writes.
     let frame = rx
-      .read_frame(&mut move |_| async {
+      .read_frame::<_, WebSocketError>(&mut move |_| async {
         unreachable!();
-        Ok::<_, WebSocketError>(())
       })
       .await?;
     match frame.opcode {
