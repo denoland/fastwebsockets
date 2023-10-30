@@ -681,18 +681,29 @@ impl ReadHalf {
       _ => 0,
     };
 
-    let length: usize = if extra > 0 {
+    if extra > 0 {
       while nread < 2 + extra {
         nread += eof!(stream.read(&mut head[nread..]).await?);
       }
-
-      match extra {
-        2 => u16::from_be_bytes(head[2..4].try_into().unwrap()) as usize,
-        8 => usize::from_be_bytes(head[2..10].try_into().unwrap()),
-        _ => unreachable!(),
-      }
-    } else {
-      length_code as usize
+    }
+    let length: usize = match extra {
+      0 => usize::from(length_code),
+      2 => u16::from_be_bytes(head[2..4].try_into().unwrap()) as usize,
+      #[cfg(any(target_pointer_width = "64", target_pointer_width = "128"))]
+      8 => u64::from_be_bytes(head[2..10].try_into().unwrap()) as usize,
+      // On 32bit systems, usize is only 4bytes wide so we must check for usize overflowing
+      #[cfg(any(
+        target_pointer_width = "8",
+        target_pointer_width = "16",
+        target_pointer_width = "32"
+      ))]
+      8 => match usize::try_from(u64::from_be_bytes(
+        head[2..10].try_into().unwrap(),
+      )) {
+        Ok(length) => length,
+        Err(_) => return Err(WebSocketError::FrameTooLarge),
+      },
+      _ => unreachable!(),
     };
 
     let mask = match masked {
