@@ -81,7 +81,7 @@ async fn connect(domain: &str) -> Result<FragmentCollector<Upgraded>> {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
-  let domain = "stream.binance.com";
+  let domain = "data-stream.binance.com";
   let mut ws = connect(domain).await?;
 
   loop {

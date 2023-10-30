@@ -118,7 +118,7 @@ pub fn generate_key() -> String {
 // https://github.com/snapview/tungstenite-rs/blob/314feea3055a93e585882fb769854a912a7e6dae/src/handshake/client.rs#L189
 fn verify(response: &Response<Body>) -> Result<(), WebSocketError> {
   if response.status() != StatusCode::SWITCHING_PROTOCOLS {
-    return Err(WebSocketError::InvalidStatusCode);
+    return Err(WebSocketError::InvalidStatusCode(response.status().as_u16()));
   }
 
   let headers = response.headers();

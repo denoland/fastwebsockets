@@ -8,8 +8,8 @@ pub enum WebSocketError {
   InvalidUTF8,
   #[error("Invalid continuation frame")]
   InvalidContinuationFrame,
-  #[error("Invalid status code")]
-  InvalidStatusCode,
+  #[error("Invalid status code: {0}")]
+  InvalidStatusCode(u16),
   #[error("Invalid upgrade header")]
   InvalidUpgradeHeader,
   #[error("Invalid connection header")]
