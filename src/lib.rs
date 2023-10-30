@@ -386,6 +386,9 @@ impl<'f, S> WebSocket<S> {
     }
   }
 
+  /// Split a [`WebSocket`] into a [`WebSocketRead`] and [`WebSocketWrite`] half. Note that the split version does not
+  /// handle fragmented packets and you may wish to create a [`FragmentCollectorRead`] over top of the read half that
+  /// is returned.
   #[cfg(feature = "unstable-split")]
   pub fn split<R, W>(
     self,
