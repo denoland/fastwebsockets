@@ -37,6 +37,7 @@ thiserror = "1.0.40"
 default = ["simd"]
 simd = ["simdutf8/aarch64_neon"]
 upgrade = ["hyper", "pin-project", "base64", "sha1"]
+unstable-split = []
 
 [dev-dependencies]
 tokio = { version = "1.25.0", features = ["full", "macros"] }
