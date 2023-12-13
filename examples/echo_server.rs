@@ -13,9 +13,9 @@
 // limitations under the License.
 
 use fastwebsockets::upgrade;
+use fastwebsockets::BackingStore;
 use fastwebsockets::OpCode;
 use fastwebsockets::WebSocketError;
-use fastwebsockets::BackingStore;
 use hyper::server::conn::Http;
 use hyper::service::service_fn;
 use hyper::Body;
@@ -61,8 +61,8 @@ fn main() -> Result<(), WebSocketError> {
     .unwrap();
 
   rt.block_on(async move {
-    let listener = TcpListener::bind("127.0.0.1:8080").await?;
-    println!("Server started, listening on {}", "127.0.0.1:8080");
+    let listener = TcpListener::bind("127.0.0.1:8081").await?;
+    println!("Server started, listening on {}", "127.0.0.1:8081");
     loop {
       let (stream, _) = listener.accept().await?;
       println!("Client connected");

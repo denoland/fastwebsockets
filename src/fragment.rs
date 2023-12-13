@@ -17,7 +17,7 @@ use std::future::Future;
 
 use crate::error::WebSocketError;
 use crate::frame::Frame;
-use crate::recv::SharedRecv;
+use crate::BackingStore;
 use crate::OpCode;
 use crate::ReadHalf;
 use crate::WebSocket;
@@ -26,7 +26,6 @@ use crate::WebSocketRead;
 use crate::WriteHalf;
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
-use crate::BackingStore;
 
 pub enum Fragment {
   Text(Option<utf8::Incomplete>, Vec<u8>),
@@ -81,8 +80,6 @@ pub struct FragmentCollector<S> {
   read_half: ReadHalf,
   write_half: WriteHalf,
   fragments: Fragments,
-  // !Sync marker
-  _marker: std::marker::PhantomData<SharedRecv>,
 }
 
 impl<S> FragmentCollector<S> {
@@ -97,38 +94,40 @@ impl<S> FragmentCollector<S> {
       read_half,
       write_half,
       fragments: Fragments::new(),
-      _marker: std::marker::PhantomData,
     }
   }
 
   /// Reads a WebSocket frame, collecting fragmented messages until the final frame is received and returns the completed message.
   ///
   /// Text frames payload is guaranteed to be valid UTF-8.
-  pub async fn read_frame<'f>(&mut self, bs: &'f mut BackingStore) -> Result<Frame<'f>, WebSocketError>
+  pub async fn read_frame<'f>(
+    &mut self,
+    bs: &'f mut BackingStore,
+  ) -> Result<Frame<'f>, WebSocketError>
   where
     S: AsyncReadExt + AsyncWriteExt + Unpin,
   {
     // loop {
-      let (res, obligated_send) =
-        self.read_half.read_frame_inner(&mut self.stream, bs).await;
-      let is_closed = self.write_half.closed;
-      if let Some(obligated_send) = obligated_send {
-        if !is_closed {
-          self.write_frame(obligated_send).await?;
-        }
+    let (res, obligated_send) =
+      self.read_half.read_frame_inner(&mut self.stream, bs).await;
+    let is_closed = self.write_half.closed;
+    if let Some(obligated_send) = obligated_send {
+      if !is_closed {
+        self.write_frame(obligated_send).await?;
       }
-      let Some(frame) = res? else {
+    }
+    let Some(frame) = res? else {
         // continue;
         unreachable!();
       };
-      if is_closed && frame.opcode != OpCode::Close {
-        return Err(WebSocketError::ConnectionClosed);
-      }
-      if let Some(frame) = self.fragments.accumulate(frame)? {
-        return Ok(frame);
-      }
+    if is_closed && frame.opcode != OpCode::Close {
+      return Err(WebSocketError::ConnectionClosed);
+    }
+    if let Some(frame) = self.fragments.accumulate(frame)? {
+      return Ok(frame);
+    }
 
-      unreachable!();
+    unreachable!();
     // }
   }
 
@@ -288,7 +287,7 @@ impl Fragments {
           }
 
           if frame.fin {
-              unreachable!();
+            unreachable!();
             // return Ok(Some(Frame::new(
             //   true,
             //   self.opcode,
@@ -300,7 +299,7 @@ impl Fragments {
         Some(Fragment::Binary(data)) => {
           data.extend_from_slice(&frame.payload);
           if frame.fin {
-              unreachable!();
+            unreachable!();
             // return Ok(Some(Frame::new(
             //   true,
             //   self.opcode,

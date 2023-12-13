@@ -156,7 +156,6 @@ mod frame;
 #[cfg_attr(docsrs, doc(cfg(feature = "upgrade")))]
 pub mod handshake;
 mod mask;
-mod recv;
 /// HTTP upgrades.
 #[cfg(feature = "upgrade")]
 #[cfg_attr(docsrs, doc(cfg(feature = "upgrade")))]
@@ -177,10 +176,9 @@ pub use crate::frame::Frame;
 pub use crate::frame::OpCode;
 pub use crate::frame::Payload;
 pub use crate::mask::unmask;
-use crate::recv::SharedRecv;
 
 #[derive(Copy, Clone, Default)]
-struct UnsendMarker(std::marker::PhantomData<SharedRecv>);
+struct UnsendMarker(std::marker::PhantomData<*mut ()>);
 
 #[derive(Copy, Clone, PartialEq)]
 pub enum Role {
@@ -377,7 +375,6 @@ impl<S> WebSocket<S> {
   where
     S: AsyncReadExt + AsyncWriteExt + Unpin,
   {
-    recv::init_once();
     Self {
       stream,
       write_half: WriteHalf::after_handshake(role),
@@ -527,27 +524,30 @@ impl<S> WebSocket<S> {
   ///   Ok(())
   /// }
   /// ```
-  pub async fn read_frame<'f>(&mut self, bs: &'f mut BackingStore) -> Result<Frame<'f>, WebSocketError>
+  pub async fn read_frame<'f>(
+    &mut self,
+    bs: &'f mut BackingStore,
+  ) -> Result<Frame<'f>, WebSocketError>
   where
     S: AsyncReadExt + AsyncWriteExt + Unpin,
   {
     // loop {
-      let (res, obligated_send) =
-        self.read_half.read_frame_inner(&mut self.stream, bs).await;
-      let is_closed = self.write_half.closed;
-      if let Some(frame) = obligated_send {
-        if !is_closed {
-          self.write_half.write_frame(&mut self.stream, frame).await?;
-        }
+    let (res, obligated_send) =
+      self.read_half.read_frame_inner(&mut self.stream, bs).await;
+    let is_closed = self.write_half.closed;
+    if let Some(frame) = obligated_send {
+      if !is_closed {
+        self.write_half.write_frame(&mut self.stream, frame).await?;
       }
-      if let Some(frame) = res? {
-        if is_closed && frame.opcode != OpCode::Close {
-          return Err(WebSocketError::ConnectionClosed);
-        }
-        return Ok(frame);
+    }
+    if let Some(frame) = res? {
+      if is_closed && frame.opcode != OpCode::Close {
+        return Err(WebSocketError::ConnectionClosed);
       }
+      return Ok(frame);
+    }
 
-      unreachable!();
+    unreachable!();
     // }
   }
 }
@@ -610,7 +610,7 @@ impl ReadHalf {
             };
 
             if !code.is_allowed() {
-                unreachable!();
+              unreachable!();
               // return (
               //   Err(WebSocketError::InvalidCloseCode),
               //   Some(Frame::close(1002, &frame.payload[2..])),
@@ -655,7 +655,7 @@ impl ReadHalf {
       }};
     }
 
-    let head = recv::init_once();
+    let mut head = &mut bs.recv_buf;
     let mut nread = 0;
 
     if let Some(spill) = self.spill.take() {
@@ -744,19 +744,13 @@ impl ReadHalf {
       stream.read_exact(&mut new_head[nread..]).await?;
 
       let payload = bs.cpy(&new_head[required - length..]);
-      return Ok(Frame::new(
-        fin,
-        opcode,
-        mask,
-        payload,
-      ));
+      return Ok(Frame::new(fin, opcode, mask, payload));
     } else if nread > required {
       // We read too much
       self.spill = Some(head[required..nread].to_vec());
     }
 
-    let payload = &mut head[required - length..required];
-    let payload = bs.cpy(payload);
+    let payload = bs.copy_to((required - length)..required);
 
     let frame = Frame::new(fin, opcode, mask, payload);
     Ok(frame)
@@ -805,24 +799,36 @@ impl WriteHalf {
   }
 }
 
+use std::cell::RefCell;
 pub struct BackingStore {
-    buf: Vec<u8>,
+  buf: Vec<u8>,
+  recv_buf: Vec<u8>,
 }
 
 impl BackingStore {
-    pub fn new() -> Self {
-        Self {
-            buf: Vec::with_capacity(1024 * 64),
-        }
+  pub fn new() -> Self {
+    Self {
+      buf: Vec::with_capacity(1024 * 64),
+      recv_buf: vec![0; 524288],
     }
+  }
 
-    pub fn cpy(&mut self, data: &[u8]) -> &mut [u8] {
-        if data.len() > self.buf.len() {
-            self.buf.resize(data.len(), 0);
-        }
-        self.buf[..data.len()].copy_from_slice(data);
-        &mut self.buf
+  pub fn cpy(&mut self, data: &[u8]) -> &mut [u8] {
+    if data.len() > self.buf.len() {
+      self.buf.resize(data.len(), 0);
     }
+    self.buf[..data.len()].copy_from_slice(data);
+    &mut self.buf
+  }
+
+  pub fn copy_to(&mut self, range: std::ops::Range<usize>) -> &mut [u8] {
+    let buf = &self.recv_buf[range];
+    if buf.len() > self.buf.len() {
+      self.buf.resize(buf.len(), 0);
+    }
+    self.buf[..buf.len()].copy_from_slice(buf);
+    &mut self.buf
+  }
 }
 
 #[cfg(test)]
