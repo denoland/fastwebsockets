@@ -15,6 +15,7 @@
 use fastwebsockets::upgrade;
 use fastwebsockets::OpCode;
 use fastwebsockets::WebSocketError;
+use fastwebsockets::BackingStore;
 use hyper::server::conn::Http;
 use hyper::service::service_fn;
 use hyper::Body;
@@ -25,8 +26,9 @@ use tokio::net::TcpListener;
 async fn handle_client(fut: upgrade::UpgradeFut) -> Result<(), WebSocketError> {
   let mut ws = fastwebsockets::FragmentCollector::new(fut.await?);
 
+  let mut bs = BackingStore::new();
   loop {
-    let frame = ws.read_frame().await?;
+    let frame = ws.read_frame(&mut bs).await?;
     match frame.opcode {
       OpCode::Close => break,
       OpCode::Text | OpCode::Binary => {

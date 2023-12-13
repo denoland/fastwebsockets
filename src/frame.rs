@@ -129,7 +129,7 @@ pub struct Frame<'f> {
   /// The masking key of the frame, if any.
   mask: Option<[u8; 4]>,
   /// The payload of the frame.
-  pub payload: Payload<'f>,
+  pub payload: &'f mut [u8],
 }
 
 const MAX_HEAD_SIZE: usize = 16;
@@ -140,7 +140,7 @@ impl<'f> Frame<'f> {
     fin: bool,
     opcode: OpCode,
     mask: Option<[u8; 4]>,
-    payload: Payload<'f>,
+    payload: &'f mut [u8],
   ) -> Self {
     Self {
       fin,
@@ -155,7 +155,7 @@ impl<'f> Frame<'f> {
   /// This is a convenience method for `Frame::new(true, OpCode::Text, None, payload)`.
   ///
   /// This method does not check if the payload is valid UTF-8.
-  pub fn text(payload: Payload<'f>) -> Self {
+  pub fn text(payload: &'f mut [u8]) -> Self {
     Self {
       fin: true,
       opcode: OpCode::Text,
@@ -167,7 +167,7 @@ impl<'f> Frame<'f> {
   /// Create a new WebSocket binary `Frame`.
   ///
   /// This is a convenience method for `Frame::new(true, OpCode::Binary, None, payload)`.
-  pub fn binary(payload: Payload<'f>) -> Self {
+  pub fn binary(payload: &'f mut [u8]) -> Self {
     Self {
       fin: true,
       opcode: OpCode::Binary,
@@ -181,25 +181,25 @@ impl<'f> Frame<'f> {
   /// This is a convenience method for `Frame::new(true, OpCode::Close, None, payload)`.
   ///
   /// This method does not check if `code` is a valid close code and `reason` is valid UTF-8.
-  pub fn close(code: u16, reason: &[u8]) -> Self {
-    let mut payload = Vec::with_capacity(2 + reason.len());
-    payload.extend_from_slice(&code.to_be_bytes());
-    payload.extend_from_slice(reason);
+  // pub fn close(code: u16, reason: &[u8]) -> Self {
+  //   let mut payload = Vec::with_capacity(2 + reason.len());
+  //   payload.extend_from_slice(&code.to_be_bytes());
+  //   payload.extend_from_slice(reason);
 
-    Self {
-      fin: true,
-      opcode: OpCode::Close,
-      mask: None,
-      payload: payload.into(),
-    }
-  }
+  //   Self {
+  //     fin: true,
+  //     opcode: OpCode::Close,
+  //     mask: None,
+  //     payload: payload.into(),
+  //   }
+  // }
 
   /// Create a new WebSocket close `Frame` with a raw payload.
   ///
   /// This is a convenience method for `Frame::new(true, OpCode::Close, None, payload)`.
   ///
   /// This method does not check if `payload` is valid Close frame payload.
-  pub fn close_raw(payload: Payload<'f>) -> Self {
+  pub fn close_raw(payload: &'f mut [u8]) -> Self {
     Self {
       fin: true,
       opcode: OpCode::Close,
@@ -211,7 +211,7 @@ impl<'f> Frame<'f> {
   /// Create a new WebSocket pong `Frame`.
   ///
   /// This is a convenience method for `Frame::new(true, OpCode::Pong, None, payload)`.
-  pub fn pong(payload: Payload<'f>) -> Self {
+  pub fn pong(payload: &'f mut [u8]) -> Self {
     Self {
       fin: true,
       opcode: OpCode::Pong,
@@ -231,10 +231,10 @@ impl<'f> Frame<'f> {
 
   pub fn mask(&mut self) {
     if let Some(mask) = self.mask {
-      crate::mask::unmask(self.payload.to_mut(), mask);
+      crate::mask::unmask(self.payload, mask);
     } else {
       let mask: [u8; 4] = rand::random();
-      crate::mask::unmask(self.payload.to_mut(), mask);
+      crate::mask::unmask(self.payload, mask);
       self.mask = Some(mask);
     }
   }
@@ -244,7 +244,7 @@ impl<'f> Frame<'f> {
   /// Note: By default, the frame payload is unmasked by `WebSocket::read_frame`.
   pub fn unmask(&mut self) {
     if let Some(mask) = self.mask {
-      crate::mask::unmask(self.payload.to_mut(), mask);
+      crate::mask::unmask(self.payload, mask);
     }
   }
 

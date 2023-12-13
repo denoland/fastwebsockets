@@ -353,7 +353,7 @@ pub struct WebSocket<S> {
   _marker: UnsendMarker,
 }
 
-impl<'f, S> WebSocket<S> {
+impl<S> WebSocket<S> {
   /// Creates a new `WebSocket` from a stream that has already completed the WebSocket handshake.
   ///
   /// Use the `upgrade` feature to handle server upgrades and client handshakes.
@@ -490,7 +490,7 @@ impl<'f, S> WebSocket<S> {
   ///   Ok(())
   /// }
   /// ```
-  pub async fn write_frame(
+  pub async fn write_frame<'f>(
     &mut self,
     frame: Frame<'f>,
   ) -> Result<(), WebSocketError>
@@ -527,13 +527,13 @@ impl<'f, S> WebSocket<S> {
   ///   Ok(())
   /// }
   /// ```
-  pub async fn read_frame(&mut self) -> Result<Frame<'f>, WebSocketError>
+  pub async fn read_frame<'f>(&mut self, bs: &'f mut BackingStore) -> Result<Frame<'f>, WebSocketError>
   where
     S: AsyncReadExt + AsyncWriteExt + Unpin,
   {
-    loop {
+    // loop {
       let (res, obligated_send) =
-        self.read_half.read_frame_inner(&mut self.stream).await;
+        self.read_half.read_frame_inner(&mut self.stream, bs).await;
       let is_closed = self.write_half.closed;
       if let Some(frame) = obligated_send {
         if !is_closed {
@@ -544,9 +544,11 @@ impl<'f, S> WebSocket<S> {
         if is_closed && frame.opcode != OpCode::Close {
           return Err(WebSocketError::ConnectionClosed);
         }
-        break Ok(frame);
+        return Ok(frame);
       }
-    }
+
+      unreachable!();
+    // }
   }
 }
 
@@ -573,11 +575,12 @@ impl ReadHalf {
   pub(crate) async fn read_frame_inner<'f, S>(
     &mut self,
     stream: &mut S,
+    bs: &'f mut BackingStore,
   ) -> (Result<Option<Frame<'f>>, WebSocketError>, Option<Frame<'f>>)
   where
     S: AsyncReadExt + Unpin,
   {
-    let mut frame = match self.parse_frame_header(stream).await {
+    let mut frame = match self.parse_frame_header(stream, bs).await {
       Ok(frame) => frame,
       Err(e) => return (Err(e), None),
     };
@@ -607,16 +610,18 @@ impl ReadHalf {
             };
 
             if !code.is_allowed() {
-              return (
-                Err(WebSocketError::InvalidCloseCode),
-                Some(Frame::close(1002, &frame.payload[2..])),
-              );
+                unreachable!();
+              // return (
+              //   Err(WebSocketError::InvalidCloseCode),
+              //   Some(Frame::close(1002, &frame.payload[2..])),
+              // );
             }
           }
         };
 
-        let obligated_send = Frame::close_raw(frame.payload.to_owned().into());
-        (Ok(Some(frame)), Some(obligated_send))
+        // let obligated_send = Frame::close_raw(frame.payload.to_owned());
+        unimplemented!();
+        // (Ok(Some(frame)), Some(obligated_send))
       }
       OpCode::Ping if self.auto_pong => {
         (Ok(None), Some(Frame::pong(frame.payload)))
@@ -635,6 +640,7 @@ impl ReadHalf {
   async fn parse_frame_header<'a, S>(
     &mut self,
     stream: &mut S,
+    bs: &'a mut BackingStore,
   ) -> Result<Frame<'a>, WebSocketError>
   where
     S: AsyncReadExt + Unpin,
@@ -736,11 +742,13 @@ impl ReadHalf {
       new_head.resize(required, 0);
 
       stream.read_exact(&mut new_head[nread..]).await?;
+
+      let payload = bs.cpy(&new_head[required - length..]);
       return Ok(Frame::new(
         fin,
         opcode,
         mask,
-        Payload::Owned(new_head[required - length..].to_vec()),
+        payload,
       ));
     } else if nread > required {
       // We read too much
@@ -748,11 +756,8 @@ impl ReadHalf {
     }
 
     let payload = &mut head[required - length..required];
-    let payload = if payload.len() > self.writev_threshold {
-      Payload::BorrowedMut(payload)
-    } else {
-      Payload::Owned(payload.to_vec())
-    };
+    let payload = bs.cpy(payload);
+
     let frame = Frame::new(fin, opcode, mask, payload);
     Ok(frame)
   }
@@ -798,6 +803,26 @@ impl WriteHalf {
 
     Ok(())
   }
+}
+
+pub struct BackingStore {
+    buf: Vec<u8>,
+}
+
+impl BackingStore {
+    pub fn new() -> Self {
+        Self {
+            buf: Vec::with_capacity(1024 * 64),
+        }
+    }
+
+    pub fn cpy(&mut self, data: &[u8]) -> &mut [u8] {
+        if data.len() > self.buf.len() {
+            self.buf.resize(data.len(), 0);
+        }
+        self.buf[..data.len()].copy_from_slice(data);
+        &mut self.buf
+    }
 }
 
 #[cfg(test)]

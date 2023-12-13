@@ -26,6 +26,7 @@ use crate::WebSocketRead;
 use crate::WriteHalf;
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
+use crate::BackingStore;
 
 pub enum Fragment {
   Text(Option<utf8::Incomplete>, Vec<u8>),
@@ -84,7 +85,7 @@ pub struct FragmentCollector<S> {
   _marker: std::marker::PhantomData<SharedRecv>,
 }
 
-impl<'f, S> FragmentCollector<S> {
+impl<S> FragmentCollector<S> {
   /// Creates a new `FragmentCollector` with the provided `WebSocket`.
   pub fn new(ws: WebSocket<S>) -> FragmentCollector<S>
   where
@@ -103,13 +104,13 @@ impl<'f, S> FragmentCollector<S> {
   /// Reads a WebSocket frame, collecting fragmented messages until the final frame is received and returns the completed message.
   ///
   /// Text frames payload is guaranteed to be valid UTF-8.
-  pub async fn read_frame(&mut self) -> Result<Frame<'f>, WebSocketError>
+  pub async fn read_frame<'f>(&mut self, bs: &'f mut BackingStore) -> Result<Frame<'f>, WebSocketError>
   where
     S: AsyncReadExt + AsyncWriteExt + Unpin,
   {
-    loop {
+    // loop {
       let (res, obligated_send) =
-        self.read_half.read_frame_inner(&mut self.stream).await;
+        self.read_half.read_frame_inner(&mut self.stream, bs).await;
       let is_closed = self.write_half.closed;
       if let Some(obligated_send) = obligated_send {
         if !is_closed {
@@ -117,7 +118,8 @@ impl<'f, S> FragmentCollector<S> {
         }
       }
       let Some(frame) = res? else {
-        continue;
+        // continue;
+        unreachable!();
       };
       if is_closed && frame.opcode != OpCode::Close {
         return Err(WebSocketError::ConnectionClosed);
@@ -125,11 +127,13 @@ impl<'f, S> FragmentCollector<S> {
       if let Some(frame) = self.fragments.accumulate(frame)? {
         return Ok(frame);
       }
-    }
+
+      unreachable!();
+    // }
   }
 
   /// See `WebSocket::write_frame`.
-  pub async fn write_frame(
+  pub async fn write_frame<'f>(
     &mut self,
     frame: Frame<'f>,
   ) -> Result<(), WebSocketError>
@@ -284,23 +288,25 @@ impl Fragments {
           }
 
           if frame.fin {
-            return Ok(Some(Frame::new(
-              true,
-              self.opcode,
-              None,
-              self.fragments.take().unwrap().take_buffer().into(),
-            )));
+              unreachable!();
+            // return Ok(Some(Frame::new(
+            //   true,
+            //   self.opcode,
+            //   None,
+            //   self.fragments.take().unwrap().take_buffer().into(),
+            // )));
           }
         }
         Some(Fragment::Binary(data)) => {
           data.extend_from_slice(&frame.payload);
           if frame.fin {
-            return Ok(Some(Frame::new(
-              true,
-              self.opcode,
-              None,
-              self.fragments.take().unwrap().take_buffer().into(),
-            )));
+              unreachable!();
+            // return Ok(Some(Frame::new(
+            //   true,
+            //   self.opcode,
+            //   None,
+            //   self.fragments.take().unwrap().take_buffer().into(),
+            // )));
           }
         }
       },
