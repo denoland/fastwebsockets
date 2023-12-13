@@ -6,6 +6,8 @@
 
 ![](./100-20-chart.svg)
 
+Y-axis is number of messages sent per sec. (size per message = payload size)
+
 ```
 Linux divy 5.19.0-1022-gcp #24~22.04.1-Ubuntu SMP x86_64 GNU/Linux
 
