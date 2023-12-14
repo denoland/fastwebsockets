@@ -49,6 +49,8 @@ trybuild = "1.0.80"
 criterion = "0.4.0"
 anyhow = "1.0.71"
 webpki-roots = "0.23.0"
+monoio = { version = "*",  default-features = false, features = ["async-cancel", "sync", "bytes", "legacy", "macros", "utils", "tokio-compat"] }
+monoio-compat = { version = "0.1.2" }
 
 [[bench]]
 name = "unmask"
