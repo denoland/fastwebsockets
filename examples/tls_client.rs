@@ -10,6 +10,7 @@ use hyper::header::UPGRADE;
 use hyper::upgrade::Upgraded;
 use hyper::Body;
 use hyper::Request;
+use hyper_util::rt::TokioIo;
 use tokio::net::TcpStream;
 use tokio_rustls::rustls::ClientConfig;
 use tokio_rustls::rustls::OwnedTrustAnchor;
@@ -48,7 +49,7 @@ fn tls_connector() -> Result<TlsConnector> {
   Ok(TlsConnector::from(Arc::new(config)))
 }
 
-async fn connect(domain: &str) -> Result<FragmentCollector<Upgraded>> {
+async fn connect(domain: &str) -> Result<FragmentCollector<TokioIo<Upgraded>>> {
   let mut addr = String::from(domain);
   addr.push_str(":9443"); // Port number for binance stream
 

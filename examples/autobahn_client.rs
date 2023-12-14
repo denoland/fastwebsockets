@@ -23,6 +23,7 @@ use hyper::header::UPGRADE;
 use hyper::upgrade::Upgraded;
 use hyper::Body;
 use hyper::Request;
+use hyper_util::rt::TokioIo;
 use tokio::net::TcpStream;
 
 struct SpawnExecutor;
@@ -37,7 +38,7 @@ where
   }
 }
 
-async fn connect(path: &str) -> Result<FragmentCollector<Upgraded>> {
+async fn connect(path: &str) -> Result<FragmentCollector<TokioIo<Upgraded>>> {
   let stream = TcpStream::connect("localhost:9001").await?;
 
   let req = Request::builder()

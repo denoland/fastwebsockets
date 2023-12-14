@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use hyper::upgrade::Upgraded;
-use hyper::Body;
+use hyper::body::Incoming;
 use hyper::Request;
 use hyper::Response;
 use hyper::StatusCode;
@@ -21,6 +21,7 @@ use hyper::StatusCode;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 
+use hyper_util::rt::TokioIo;
 use tokio::io::AsyncRead;
 use tokio::io::AsyncWrite;
 
@@ -81,14 +82,14 @@ use crate::WebSocketError;
 /// ```
 pub async fn client<S, E>(
   executor: &E,
-  request: Request<Body>,
+  request: Request<Incoming>,
   socket: S,
-) -> Result<(WebSocket<Upgraded>, Response<Body>), WebSocketError>
+) -> Result<(WebSocket<TokioIo<Upgraded>>, Response<Incoming>), WebSocketError>
 where
   S: AsyncRead + AsyncWrite + Send + Unpin + 'static,
   E: hyper::rt::Executor<Pin<Box<dyn Future<Output = ()> + Send>>>,
 {
-  let (mut sender, conn) = hyper::client::conn::handshake(socket).await?;
+  let (mut sender, conn) = hyper::client::conn::http1::handshake(TokioIo::new(socket)).await?;
   let fut = Box::pin(async move {
     if let Err(e) = conn.await {
       eprintln!("Error polling connection: {}", e);
@@ -101,7 +102,7 @@ where
 
   match hyper::upgrade::on(&mut response).await {
     Ok(upgraded) => {
-      Ok((WebSocket::after_handshake(upgraded, Role::Client), response))
+      Ok((WebSocket::after_handshake(TokioIo::new(upgraded), Role::Client), response))
     }
     Err(e) => Err(e.into()),
   }
@@ -116,7 +117,7 @@ pub fn generate_key() -> String {
 }
 
 // https://github.com/snapview/tungstenite-rs/blob/314feea3055a93e585882fb769854a912a7e6dae/src/handshake/client.rs#L189
-fn verify(response: &Response<Body>) -> Result<(), WebSocketError> {
+fn verify(response: &Response<Incoming>) -> Result<(), WebSocketError> {
   if response.status() != StatusCode::SWITCHING_PROTOCOLS {
     return Err(WebSocketError::InvalidStatusCode(
       response.status().as_u16(),

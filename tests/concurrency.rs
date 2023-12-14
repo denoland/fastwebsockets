@@ -21,6 +21,7 @@ use hyper::service::service_fn;
 use hyper::Body;
 use hyper::Request;
 use hyper::Response;
+use hyper_util::rt::TokioIo;
 use tokio::net::TcpListener;
 
 use fastwebsockets::handshake;
@@ -66,7 +67,7 @@ async fn server_upgrade(mut req: Request<Body>) -> Result<Response<Body>> {
   Ok(response)
 }
 
-async fn connect(client_id: usize) -> Result<WebSocket<Upgraded>> {
+async fn connect(client_id: usize) -> Result<WebSocket<TokioIo<Upgraded>>> {
   let stream = TcpStream::connect("localhost:8080").await?;
 
   let req = Request::builder()

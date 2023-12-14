@@ -21,9 +21,9 @@
 use base64;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
-use hyper::Body;
 use hyper::Request;
 use hyper::Response;
+use hyper_util::rt::TokioIo;
 use pin_project::pin_project;
 use sha1::Digest;
 use sha1::Sha1;
@@ -69,7 +69,7 @@ pub struct UpgradeFut {
 ///
 pub fn upgrade<B>(
   mut request: impl std::borrow::BorrowMut<Request<B>>,
-) -> Result<(Response<Body>, UpgradeFut), Error> {
+) -> Result<(Response<&'static str>, UpgradeFut), Error> {
   let request = request.borrow_mut();
 
   let key = request
@@ -93,7 +93,7 @@ pub fn upgrade<B>(
       "Sec-WebSocket-Accept",
       &sec_websocket_protocol(key.as_bytes()),
     )
-    .body(Body::from("switching to websocket protocol"))
+    .body("switching to websocket protocol")
     .expect("bug: failed to build response");
 
   let stream = UpgradeFut {
@@ -158,7 +158,7 @@ fn trim_end(data: &[u8]) -> &[u8] {
 }
 
 impl std::future::Future for UpgradeFut {
-  type Output = Result<WebSocket<hyper::upgrade::Upgraded>, Error>;
+  type Output = Result<WebSocket<TokioIo<hyper::upgrade::Upgraded>>, Error>;
 
   fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
     let this = self.project();
@@ -166,7 +166,6 @@ impl std::future::Future for UpgradeFut {
       Poll::Pending => return Poll::Pending,
       Poll::Ready(x) => x,
     };
-
-    Poll::Ready(Ok(WebSocket::after_handshake(upgraded?, Role::Server)))
+    Poll::Ready(Ok(WebSocket::after_handshake(TokioIo::new(upgraded?), Role::Server)))
   }
 }
