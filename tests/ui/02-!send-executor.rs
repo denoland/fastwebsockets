@@ -2,10 +2,12 @@ use fastwebsockets::WebSocket;
 use hyper::header::CONNECTION;
 use hyper::header::UPGRADE;
 use hyper::upgrade::Upgraded;
-use hyper::Body;
+use hyper::body::Bytes;
+use http_body_util::Empty;
 use hyper::Request;
 use std::future::Future;
 use tokio::net::TcpStream;
+use hyper_util::rt::tokio::TokioIo;
 use anyhow::Result;
 
 struct SpawnLocalExecutor;
@@ -22,7 +24,7 @@ where
 
 async fn connect(
   path: &str,
-) -> Result<WebSocket<Upgraded>> {
+) -> Result<WebSocket<TokioIo<Upgraded>>> {
   let stream = TcpStream::connect("localhost:9001").await?;
 
   let req = Request::builder()
@@ -36,7 +38,7 @@ async fn connect(
       fastwebsockets::handshake::generate_key(),
     )
     .header("Sec-WebSocket-Version", "13")
-    .body(Body::empty())?;
+    .body(Empty::<Bytes>::new())?;
 
   let (ws, _) =
     fastwebsockets::handshake::client(&SpawnLocalExecutor, req, stream).await?;

@@ -25,7 +25,9 @@ required-features = ["upgrade"]
 [dependencies]
 tokio = { version = "1.25.0",  default-features = false, features = ["io-util"] }
 simdutf8 = { version = "0.1.4", optional = true }
-hyper = { version = "0.14.26", features = ["http1", "server", "client"], optional = true }
+hyper-util = { version = "0.1.0", features = ["tokio"], optional = true }
+http-body-util = { version = "0.1.0", optional = true }
+hyper = { version = "1", features = ["http1", "server", "client"], optional = true }
 pin-project = { version = "1.0.8", optional = true }
 base64 = { version = "0.21.0", optional = true }
 sha1 = { version = "0.10.5", optional = true }
@@ -36,19 +38,22 @@ thiserror = "1.0.40"
 [features]
 default = ["simd"]
 simd = ["simdutf8/aarch64_neon"]
-upgrade = ["hyper", "pin-project", "base64", "sha1"]
+upgrade = ["hyper", "pin-project", "base64", "sha1", "hyper-util", "http-body-util"]
 unstable-split = []
 
 [dev-dependencies]
 tokio = { version = "1.25.0", features = ["full", "macros"] }
 tokio-rustls = "0.24.0"
 rustls-pemfile = "1.0"
-hyper = { version = "0.14.26", features = ["http1", "server", "client", "tcp"] }
+hyper-util = { version = "0.1.0", features = ["tokio"] }
+http-body-util = { version = "0.1.0" }
+hyper = { version = "1", features = ["http1", "server", "client"] }
 assert2 = "0.3.4"
 trybuild = "1.0.80"
 criterion = "0.4.0"
 anyhow = "1.0.71"
 webpki-roots = "0.23.0"
+bytes = "1.4.0"
 
 [[bench]]
 name = "unmask"

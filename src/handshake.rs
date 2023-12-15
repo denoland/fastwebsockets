@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use hyper::body::Incoming;
 use hyper::upgrade::Upgraded;
-use hyper::Body;
 use hyper::Request;
 use hyper::Response;
 use hyper::StatusCode;
@@ -21,6 +21,7 @@ use hyper::StatusCode;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 
+use hyper_util::rt::TokioIo;
 use tokio::io::AsyncRead;
 use tokio::io::AsyncWrite;
 
@@ -41,12 +42,14 @@ use crate::WebSocketError;
 /// ```
 /// use fastwebsockets::handshake;
 /// use fastwebsockets::WebSocket;
-/// use hyper::{Request, Body, upgrade::Upgraded, header::{UPGRADE, CONNECTION}};
+/// use hyper::{Request, body::Bytes, upgrade::Upgraded, header::{UPGRADE, CONNECTION}};
+/// use hyper_util::rt::TokioIo;
+/// use http_body_util::Empty;
 /// use tokio::net::TcpStream;
 /// use std::future::Future;
 /// use anyhow::Result;
 ///
-/// async fn connect() -> Result<WebSocket<Upgraded>> {
+/// async fn connect() -> Result<WebSocket<TokioIo<Upgraded>>> {
 ///   let stream = TcpStream::connect("localhost:9001").await?;
 ///
 ///   let req = Request::builder()
@@ -60,7 +63,7 @@ use crate::WebSocketError;
 ///       fastwebsockets::handshake::generate_key(),
 ///     )
 ///     .header("Sec-WebSocket-Version", "13")
-///     .body(Body::empty())?;
+///     .body(Empty::<Bytes>::new())?;
 ///
 ///   let (ws, _) = handshake::client(&SpawnExecutor, req, stream).await?;
 ///   Ok(ws)
@@ -79,18 +82,22 @@ use crate::WebSocketError;
 ///   }
 /// }
 /// ```
-pub async fn client<S, E>(
+pub async fn client<S, E, B>(
   executor: &E,
-  request: Request<Body>,
+  request: Request<B>,
   socket: S,
-) -> Result<(WebSocket<Upgraded>, Response<Body>), WebSocketError>
+) -> Result<(WebSocket<TokioIo<Upgraded>>, Response<Incoming>), WebSocketError>
 where
   S: AsyncRead + AsyncWrite + Send + Unpin + 'static,
   E: hyper::rt::Executor<Pin<Box<dyn Future<Output = ()> + Send>>>,
+  B: hyper::body::Body + 'static + Send,
+  B::Data: Send,
+  B::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
 {
-  let (mut sender, conn) = hyper::client::conn::handshake(socket).await?;
+  let (mut sender, conn) =
+    hyper::client::conn::http1::handshake(TokioIo::new(socket)).await?;
   let fut = Box::pin(async move {
-    if let Err(e) = conn.await {
+    if let Err(e) = conn.with_upgrades().await {
       eprintln!("Error polling connection: {}", e);
     }
   });
@@ -100,9 +107,10 @@ where
   verify(&response)?;
 
   match hyper::upgrade::on(&mut response).await {
-    Ok(upgraded) => {
-      Ok((WebSocket::after_handshake(upgraded, Role::Client), response))
-    }
+    Ok(upgraded) => Ok((
+      WebSocket::after_handshake(TokioIo::new(upgraded), Role::Client),
+      response,
+    )),
     Err(e) => Err(e.into()),
   }
 }
@@ -116,7 +124,7 @@ pub fn generate_key() -> String {
 }
 
 // https://github.com/snapview/tungstenite-rs/blob/314feea3055a93e585882fb769854a912a7e6dae/src/handshake/client.rs#L189
-fn verify(response: &Response<Body>) -> Result<(), WebSocketError> {
+fn verify(response: &Response<Incoming>) -> Result<(), WebSocketError> {
   if response.status() != StatusCode::SWITCHING_PROTOCOLS {
     return Err(WebSocketError::InvalidStatusCode(
       response.status().as_u16(),
