@@ -47,6 +47,7 @@ async fn hyper() {
       tokio::spawn(async move {
         if let Err(err) = http1::Builder::new()
           .serve_connection(io, service_fn(upgrade_websocket))
+          .with_upgrades()
           .await
         {
           println!("Error serving connection: {:?}", err);
