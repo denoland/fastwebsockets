@@ -84,12 +84,13 @@
 //!
 //! ```
 //! use fastwebsockets::upgrade::upgrade;
-//! use hyper::{Request, Body, Response};
+//! use http_body_util::Empty;
+//! use hyper::{Request, body::{Incoming, Bytes}, Response};
 //! use anyhow::Result;
 //!
 //! async fn server_upgrade(
-//!   mut req: Request<Body>,
-//! ) -> Result<Response<Body>> {
+//!   mut req: Request<Incoming>,
+//! ) -> Result<Response<Empty<Bytes>>> {
 //!   let (response, fut) = upgrade(&mut req)?;
 //!
 //!   tokio::spawn(async move {
@@ -106,12 +107,14 @@
 //! ```
 //! use fastwebsockets::handshake;
 //! use fastwebsockets::FragmentCollector;
-//! use hyper::{Request, Body, upgrade::Upgraded, header::{UPGRADE, CONNECTION}};
+//! use hyper::{Request, body::Bytes, upgrade::Upgraded, header::{UPGRADE, CONNECTION}};
+//! use http_body_util::Empty;
+//! use hyper_util::rt::TokioIo;
 //! use tokio::net::TcpStream;
 //! use std::future::Future;
 //! use anyhow::Result;
 //!
-//! async fn connect() -> Result<FragmentCollector<Upgraded>> {
+//! async fn connect() -> Result<FragmentCollector<TokioIo<Upgraded>>> {
 //!   let stream = TcpStream::connect("localhost:9001").await?;
 //!
 //!   let req = Request::builder()
@@ -125,7 +128,7 @@
 //!       fastwebsockets::handshake::generate_key(),
 //!     )
 //!     .header("Sec-WebSocket-Version", "13")
-//!     .body(Body::empty())?;
+//!     .body(Empty::<Bytes>::new())?;
 //!
 //!   let (ws, _) = handshake::client(&SpawnExecutor, req, stream).await?;
 //!   Ok(FragmentCollector::new(ws))

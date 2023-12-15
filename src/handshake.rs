@@ -42,12 +42,14 @@ use crate::WebSocketError;
 /// ```
 /// use fastwebsockets::handshake;
 /// use fastwebsockets::WebSocket;
-/// use hyper::{Request, Body, upgrade::Upgraded, header::{UPGRADE, CONNECTION}};
+/// use hyper::{Request, body::Bytes, upgrade::Upgraded, header::{UPGRADE, CONNECTION}};
+/// use hyper_util::rt::TokioIo;
+/// use http_body_util::Empty;
 /// use tokio::net::TcpStream;
 /// use std::future::Future;
 /// use anyhow::Result;
 ///
-/// async fn connect() -> Result<WebSocket<Upgraded>> {
+/// async fn connect() -> Result<WebSocket<TokioIo<Upgraded>>> {
 ///   let stream = TcpStream::connect("localhost:9001").await?;
 ///
 ///   let req = Request::builder()
@@ -61,7 +63,7 @@ use crate::WebSocketError;
 ///       fastwebsockets::handshake::generate_key(),
 ///     )
 ///     .header("Sec-WebSocket-Version", "13")
-///     .body(Body::empty())?;
+///     .body(Empty::<Bytes>::new())?;
 ///
 ///   let (ws, _) = handshake::client(&SpawnExecutor, req, stream).await?;
 ///   Ok(ws)
