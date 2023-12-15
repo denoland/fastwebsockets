@@ -68,12 +68,13 @@ This feature is powered by [hyper](https://docs.rs/hyper).
 
 ```rust
 use fastwebsockets::upgrade::upgrade;
-use hyper::{Request, Body, Response};
+use hyper::{Request, body::{Incoming, Bytes}, Response};
+use http_body_util::Empty;
 use anyhow::Result;
 
 async fn server_upgrade(
-  mut req: Request<Body>,
-) -> Result<Response<Body>> {
+  mut req: Request<Incoming>,
+) -> Result<Response<Empty<Bytes>>> {
   let (response, fut) = upgrade::upgrade(&mut req)?;
 
   tokio::spawn(async move {
@@ -91,7 +92,8 @@ Use the `handshake` module for client-side handshakes.
 ```rust
 use fastwebsockets::handshake;
 use fastwebsockets::WebSocket;
-use hyper::{Request, Body, upgrade::Upgraded, header::{UPGRADE, CONNECTION}};
+use hyper::{Request, body::Bytes, upgrade::Upgraded, header::{UPGRADE, CONNECTION}};
+use http_body_util::Empty;
 use tokio::net::TcpStream;
 use std::future::Future;
 use anyhow::Result;
@@ -110,7 +112,7 @@ async fn connect() -> Result<WebSocket<Upgraded>> {
       fastwebsockets::handshake::generate_key(),
     )
     .header("Sec-WebSocket-Version", "13")
-    .body(Body::empty())?;
+    .body(Empty::<Bytes>::new())?;
 
   let (ws, _) = handshake::client(&SpawnExecutor, req, stream).await?;
   Ok(ws)
