@@ -15,9 +15,11 @@
 use anyhow::Result;
 use fastwebsockets::upgrade;
 use fastwebsockets::OpCode;
-use hyper::server::conn::Http;
+use http_body_util::Empty;
+use hyper::body::Bytes;
+use hyper::body::Incoming;
+use hyper::server::conn::http1;
 use hyper::service::service_fn;
-use hyper::Body;
 use hyper::Request;
 use hyper::Response;
 use std::sync::Arc;
@@ -46,7 +48,9 @@ async fn handle_client(fut: upgrade::UpgradeFut) -> Result<()> {
   Ok(())
 }
 
-async fn server_upgrade(mut req: Request<Body>) -> Result<Response<Body>> {
+async fn server_upgrade(
+  mut req: Request<Incoming>,
+) -> Result<Response<Empty<Bytes>>> {
   let (response, fut) = upgrade::upgrade(&mut req)?;
 
   tokio::spawn(async move {
@@ -88,8 +92,9 @@ async fn main() -> Result<()> {
     let acceptor = acceptor.clone();
     tokio::spawn(async move {
       let stream = acceptor.accept(stream).await.unwrap();
-      let conn_fut = Http::new()
-        .serve_connection(stream, service_fn(server_upgrade))
+      let io = hyper_util::rt::TokioIo::new(stream);
+      let conn_fut = http1::Builder::new()
+        .serve_connection(io, service_fn(server_upgrade))
         .with_upgrades();
       if let Err(e) = conn_fut.await {
         println!("An error occurred: {:?}", e);

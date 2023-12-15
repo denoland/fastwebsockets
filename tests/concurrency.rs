@@ -16,9 +16,11 @@ use anyhow::Result;
 use fastwebsockets::upgrade;
 use fastwebsockets::Frame;
 use fastwebsockets::OpCode;
-use hyper::server::conn::Http;
+use http_body_util::Empty;
+use hyper::body::Bytes;
+use hyper::body::Incoming;
+use hyper::server::conn::http1;
 use hyper::service::service_fn;
-use hyper::Body;
 use hyper::Request;
 use hyper::Response;
 use hyper_util::rt::TokioIo;
@@ -49,7 +51,9 @@ async fn handle_client(
   Ok(())
 }
 
-async fn server_upgrade(mut req: Request<Body>) -> Result<Response<Body>> {
+async fn server_upgrade(
+  mut req: Request<Incoming>,
+) -> Result<Response<Empty<Bytes>>> {
   let (response, fut) = upgrade::upgrade(&mut req)?;
 
   let client_id: usize = req
@@ -82,7 +86,7 @@ async fn connect(client_id: usize) -> Result<WebSocket<TokioIo<Upgraded>>> {
       fastwebsockets::handshake::generate_key(),
     )
     .header("Sec-WebSocket-Version", "13")
-    .body(Body::empty())?;
+    .body(Empty::<Bytes>::new())?;
 
   let (ws, _) = handshake::client(&SpawnExecutor, req, stream).await?;
   Ok(ws)
@@ -112,8 +116,9 @@ async fn test() -> Result<()> {
     loop {
       let (stream, _) = listener.accept().await.unwrap();
       tokio::spawn(async move {
-        let conn_fut = Http::new()
-          .serve_connection(stream, service_fn(server_upgrade))
+        let io = TokioIo::new(stream);
+        let conn_fut = http1::Builder::new()
+          .serve_connection(io, service_fn(server_upgrade))
           .with_upgrades();
         conn_fut.await.unwrap();
       });

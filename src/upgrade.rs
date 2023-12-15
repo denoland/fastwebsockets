@@ -21,6 +21,8 @@
 use base64;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
+use http_body_util::Empty;
+use hyper::body::Bytes;
 use hyper::Request;
 use hyper::Response;
 use hyper_util::rt::TokioIo;
@@ -69,7 +71,7 @@ pub struct UpgradeFut {
 ///
 pub fn upgrade<B>(
   mut request: impl std::borrow::BorrowMut<Request<B>>,
-) -> Result<(Response<&'static str>, UpgradeFut), Error> {
+) -> Result<(Response<Empty<Bytes>>, UpgradeFut), Error> {
   let request = request.borrow_mut();
 
   let key = request
@@ -93,7 +95,7 @@ pub fn upgrade<B>(
       "Sec-WebSocket-Accept",
       &sec_websocket_protocol(key.as_bytes()),
     )
-    .body("switching to websocket protocol")
+    .body(Empty::new())
     .expect("bug: failed to build response");
 
   let stream = UpgradeFut {
@@ -166,6 +168,9 @@ impl std::future::Future for UpgradeFut {
       Poll::Pending => return Poll::Pending,
       Poll::Ready(x) => x,
     };
-    Poll::Ready(Ok(WebSocket::after_handshake(TokioIo::new(upgraded?), Role::Server)))
+    Poll::Ready(Ok(WebSocket::after_handshake(
+      TokioIo::new(upgraded?),
+      Role::Server,
+    )))
   }
 }

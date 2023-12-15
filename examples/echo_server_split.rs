@@ -16,9 +16,11 @@ use fastwebsockets::upgrade;
 use fastwebsockets::FragmentCollectorRead;
 use fastwebsockets::OpCode;
 use fastwebsockets::WebSocketError;
-use hyper::server::conn::Http;
+use http_body_util::Empty;
+use hyper::body::Bytes;
+use hyper::body::Incoming;
+use hyper::server::conn::http1;
 use hyper::service::service_fn;
-use hyper::Body;
 use hyper::Request;
 use hyper::Response;
 use tokio::net::TcpListener;
@@ -46,8 +48,8 @@ async fn handle_client(fut: upgrade::UpgradeFut) -> Result<(), WebSocketError> {
   Ok(())
 }
 async fn server_upgrade(
-  mut req: Request<Body>,
-) -> Result<Response<Body>, WebSocketError> {
+  mut req: Request<Incoming>,
+) -> Result<Response<Empty<Bytes>>, WebSocketError> {
   let (response, fut) = upgrade::upgrade(&mut req)?;
 
   tokio::task::spawn(async move {
@@ -72,8 +74,9 @@ fn main() -> Result<(), WebSocketError> {
       let (stream, _) = listener.accept().await?;
       println!("Client connected");
       tokio::spawn(async move {
-        let conn_fut = Http::new()
-          .serve_connection(stream, service_fn(server_upgrade))
+        let io = hyper_util::rt::TokioIo::new(stream);
+        let conn_fut = http1::Builder::new()
+          .serve_connection(io, service_fn(server_upgrade))
           .with_upgrades();
         if let Err(e) = conn_fut.await {
           println!("An error occurred: {:?}", e);

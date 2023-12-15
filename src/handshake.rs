@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use hyper::upgrade::Upgraded;
 use hyper::body::Incoming;
+use hyper::upgrade::Upgraded;
 use hyper::Request;
 use hyper::Response;
 use hyper::StatusCode;
@@ -80,18 +80,22 @@ use crate::WebSocketError;
 ///   }
 /// }
 /// ```
-pub async fn client<S, E>(
+pub async fn client<S, E, B>(
   executor: &E,
-  request: Request<Incoming>,
+  request: Request<B>,
   socket: S,
 ) -> Result<(WebSocket<TokioIo<Upgraded>>, Response<Incoming>), WebSocketError>
 where
   S: AsyncRead + AsyncWrite + Send + Unpin + 'static,
   E: hyper::rt::Executor<Pin<Box<dyn Future<Output = ()> + Send>>>,
+  B: hyper::body::Body + 'static + Send,
+  B::Data: Send,
+  B::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
 {
-  let (mut sender, conn) = hyper::client::conn::http1::handshake(TokioIo::new(socket)).await?;
+  let (mut sender, conn) =
+    hyper::client::conn::http1::handshake(TokioIo::new(socket)).await?;
   let fut = Box::pin(async move {
-    if let Err(e) = conn.await {
+    if let Err(e) = conn.with_upgrades().await {
       eprintln!("Error polling connection: {}", e);
     }
   });
@@ -101,9 +105,10 @@ where
   verify(&response)?;
 
   match hyper::upgrade::on(&mut response).await {
-    Ok(upgraded) => {
-      Ok((WebSocket::after_handshake(TokioIo::new(upgraded), Role::Client), response))
-    }
+    Ok(upgraded) => Ok((
+      WebSocket::after_handshake(TokioIo::new(upgraded), Role::Client),
+      response,
+    )),
     Err(e) => Err(e.into()),
   }
 }

@@ -2,13 +2,14 @@ use std::future::Future;
 use std::sync::Arc;
 
 use anyhow::Result;
+use bytes::Bytes;
 use fastwebsockets::FragmentCollector;
 use fastwebsockets::Frame;
 use fastwebsockets::OpCode;
+use http_body_util::Empty;
 use hyper::header::CONNECTION;
 use hyper::header::UPGRADE;
 use hyper::upgrade::Upgraded;
-use hyper::Body;
 use hyper::Request;
 use hyper_util::rt::TokioIo;
 use tokio::net::TcpStream;
@@ -73,7 +74,7 @@ async fn connect(domain: &str) -> Result<FragmentCollector<TokioIo<Upgraded>>> {
       fastwebsockets::handshake::generate_key(),
     )
     .header("Sec-WebSocket-Version", "13")
-    .body(Body::empty())?;
+    .body(Empty::<Bytes>::new())?;
 
   let (ws, _) =
     fastwebsockets::handshake::client(&SpawnExecutor, req, tls_stream).await?;
