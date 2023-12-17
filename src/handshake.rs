@@ -12,11 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use http_body_util::Empty;
+use hyper::body::Bytes;
 use hyper::body::Incoming;
 use hyper::upgrade::Upgraded;
 use hyper::Request;
 use hyper::Response;
 use hyper::StatusCode;
+use hyper::Uri;
+use std::sync::Arc;
+use tokio_rustls::rustls::ClientConfig;
+use tokio_rustls::rustls::OwnedTrustAnchor;
+use tokio_rustls::TlsConnector;
 
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
@@ -152,4 +159,184 @@ fn verify(response: &Response<Incoming>) -> Result<(), WebSocketError> {
   }
 
   Ok(())
+}
+
+/// Trait for converting various types into HTTP requests used for a client connection.
+pub trait IntoClientRequest<B>
+where
+  B: hyper::body::Body + 'static + Send,
+  B::Data: Send,
+  B::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
+{
+  /// Convert into a `Request` that can be used for a client connection.
+  fn into_client_request(self) -> Result<Request<B>, WebSocketError>;
+}
+
+impl<'a> IntoClientRequest<Empty<Bytes>> for &'a str {
+  fn into_client_request(
+    self,
+  ) -> Result<Request<Empty<Bytes>>, WebSocketError> {
+    self
+      .parse::<Uri>()
+      .map_err(|_| WebSocketError::InvalidUri)?
+      .into_client_request()
+  }
+}
+
+impl<'a> IntoClientRequest<Empty<Bytes>> for &'a String {
+  fn into_client_request(
+    self,
+  ) -> Result<Request<Empty<Bytes>>, WebSocketError> {
+    <&str as IntoClientRequest<Empty<Bytes>>>::into_client_request(self)
+  }
+}
+
+impl IntoClientRequest<Empty<Bytes>> for String {
+  fn into_client_request(
+    self,
+  ) -> Result<Request<Empty<Bytes>>, WebSocketError> {
+    <&str as IntoClientRequest<Empty<Bytes>>>::into_client_request(&self)
+  }
+}
+
+impl<'a> IntoClientRequest<Empty<Bytes>> for &'a Uri {
+  fn into_client_request(
+    self,
+  ) -> Result<Request<Empty<Bytes>>, WebSocketError> {
+    self.clone().into_client_request()
+  }
+}
+
+impl IntoClientRequest<Empty<Bytes>> for Uri {
+  fn into_client_request(
+    self,
+  ) -> Result<Request<Empty<Bytes>>, WebSocketError> {
+    let authority =
+      self.authority().ok_or(WebSocketError::NoHostName)?.as_str();
+    let host = authority
+      .find('@')
+      .map(|idx| authority.split_at(idx + 1).1)
+      .unwrap_or_else(|| authority);
+
+    if host.is_empty() {
+      return Err(WebSocketError::EmptyHostName);
+    }
+
+    let req = Request::builder()
+      .method("GET")
+      .header("Host", host)
+      .header("Connection", "Upgrade")
+      .header("Upgrade", "websocket")
+      .header("Sec-WebSocket-Version", "13")
+      .header("Sec-WebSocket-Key", generate_key())
+      .uri(self)
+      .body(Empty::<Bytes>::new())?;
+
+    Ok(req)
+  }
+}
+
+/// Connect WebSocket.
+///
+/// The URL may be either ws:// or wss://.
+///
+/// # Example
+///
+/// ```
+/// #[tokio::test]
+/// async fn simple() -> Result<(), fastwebsockets::WebSocketError> {
+///   let url = "wss://fstream.binance.com/ws/Estn2SL73HZfTdKCetdGmWPKrT0gpdl0JUnV9QgkZnUZ2eMwtTbcN42zTOOtxAe9";
+///   let mut ws = fastwebsockets::handshake::connect(url).await?;
+///   let json = r#"
+///   {
+///     "method": "REQUEST",
+///     "params":
+///     [
+///     "Estn2SL73HZfTdKCetdGmWPKrT0gpdl0JUnV9QgkZnUZ2eMwtTbcN42zTOOtxAe9@account",
+///     "Estn2SL73HZfTdKCetdGmWPKrT0gpdl0JUnV9QgkZnUZ2eMwtTbcN42zTOOtxAe9@balance"
+///     ],
+///     "id": 777
+///   }"#;
+///   ws.write_frame(fastwebsockets::Frame::text(
+///     fastwebsockets::Payload::Borrowed(json.as_bytes()),
+///   ))
+///   .await?;
+///   let result = ws.read_frame().await?;
+///   println!(
+///     "{}",
+///     String::from_utf8_lossy(result.payload.to_vec().as_slice())
+///   );
+///   Ok(())
+/// }
+/// ```
+pub async fn connect<R, B>(
+  request: R,
+) -> Result<WebSocket<TokioIo<Upgraded>>, WebSocketError>
+where
+  R: IntoClientRequest<B>,
+  B: hyper::body::Body + 'static + Send,
+  B::Data: Send,
+  B::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
+{
+  struct SpawnExecutor;
+
+  impl<Fut> hyper::rt::Executor<Fut> for SpawnExecutor
+  where
+    Fut: Future + Send + 'static,
+    Fut::Output: Send + 'static,
+  {
+    fn execute(&self, fut: Fut) {
+      tokio::task::spawn(fut);
+    }
+  }
+
+  let request = request.into_client_request()?;
+  let host = request.uri().host().ok_or(WebSocketError::NoHostName)?;
+  let port = request
+    .uri()
+    .port_u16()
+    .or_else(|| match request.uri().scheme_str() {
+      Some("wss") => Some(443),
+      Some("ws") => Some(80),
+      _ => None,
+    })
+    .ok_or(WebSocketError::UnsupportedUrlScheme)?;
+  let stream = tokio::net::TcpStream::connect(format!("{host}:{port}"))
+    .await
+    .map_err(|v| WebSocketError::IoError(v))?;
+
+  if port == 443 {
+    let domain = tokio_rustls::rustls::ServerName::try_from(host)
+      .map_err(|_| {
+        std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid dnsname")
+      })?
+      .to_owned();
+    let tls_stream = tls_connector()?.connect(domain, stream).await?;
+    return client(&SpawnExecutor, request, tls_stream)
+      .await
+      .map(|v| v.0);
+  }
+
+  client(&SpawnExecutor, request, stream).await.map(|v| v.0)
+}
+
+fn tls_connector() -> Result<TlsConnector, WebSocketError> {
+  let mut root_store = tokio_rustls::rustls::RootCertStore::empty();
+
+  root_store.add_trust_anchors(webpki_roots::TLS_SERVER_ROOTS.0.iter().map(
+    |ta| {
+      OwnedTrustAnchor::from_subject_spki_name_constraints(
+        ta.subject,
+        ta.spki,
+        ta.name_constraints,
+      )
+    },
+  ));
+
+  let config = ClientConfig::builder()
+    .with_safe_defaults()
+    .with_root_certificates(root_store)
+    .with_no_client_auth();
+
+  Ok(TlsConnector::from(Arc::new(config)))
 }

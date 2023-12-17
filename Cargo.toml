@@ -7,6 +7,7 @@ license = "Apache-2.0"
 edition = "2021"
 repository = "https://github.com/denoland/fastwebsockets"
 
+
 [[example]]
 name = "echo_server"
 path = "examples/echo_server.rs"
@@ -23,11 +24,17 @@ path = "examples/tls_client.rs"
 required-features = ["upgrade"]
 
 [dependencies]
-tokio = { version = "1.25.0",  default-features = false, features = ["io-util"] }
+tokio = { version = "1.25.0", default-features = false, features = ["io-util"] }
+tokio-rustls = "0.24.0"
+webpki-roots = "0.23.0"
 simdutf8 = { version = "0.1.4", optional = true }
 hyper-util = { version = "0.1.0", features = ["tokio"], optional = true }
 http-body-util = { version = "0.1.0", optional = true }
-hyper = { version = "1", features = ["http1", "server", "client"], optional = true }
+hyper = { version = "1", features = [
+  "http1",
+  "server",
+  "client",
+], optional = true }
 pin-project = { version = "1.0.8", optional = true }
 base64 = { version = "0.21.0", optional = true }
 sha1 = { version = "0.10.5", optional = true }
@@ -38,7 +45,14 @@ thiserror = "1.0.40"
 [features]
 default = ["simd"]
 simd = ["simdutf8/aarch64_neon"]
-upgrade = ["hyper", "pin-project", "base64", "sha1", "hyper-util", "http-body-util"]
+upgrade = [
+  "hyper",
+  "pin-project",
+  "base64",
+  "sha1",
+  "hyper-util",
+  "http-body-util",
+]
 unstable-split = []
 
 [dev-dependencies]

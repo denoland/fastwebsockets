@@ -2,6 +2,14 @@ use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum WebSocketError {
+  #[error("No host name in the URL")]
+  NoHostName,
+  #[error("URL contains empty host name")]
+  EmptyHostName,
+  #[error("Invalid Uri")]
+  InvalidUri,
+  #[error("URL scheme not supported")]
+  UnsupportedUrlScheme,
   #[error("Invalid fragment")]
   InvalidFragment,
   #[error("Invalid UTF-8")]
@@ -44,4 +52,7 @@ pub enum WebSocketError {
   #[cfg(feature = "unstable-split")]
   #[error("Failed to send frame")]
   SendError(#[from] Box<dyn std::error::Error + Send + Sync + 'static>),
+  #[cfg(feature = "upgrade")]
+  #[error(transparent)]
+  NetworkHTTPError(#[from] hyper::http::Error),
 }
