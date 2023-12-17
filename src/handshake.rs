@@ -320,7 +320,11 @@ where
   client(&SpawnExecutor, request, stream).await.map(|v| v.0)
 }
 
-fn tls_connector() -> Result<TlsConnector, WebSocketError> {
+/// Constructs a TLS connector with default configuration and root certificates from webpki_roots.
+///
+/// This function initializes a `RootCertStore` with trust anchors from the webpki_roots crate
+/// and creates a TLS connector using the tokio_rustls library.
+pub fn tls_connector() -> Result<TlsConnector, WebSocketError> {
   let mut root_store = tokio_rustls::rustls::RootCertStore::empty();
 
   root_store.add_trust_anchors(webpki_roots::TLS_SERVER_ROOTS.0.iter().map(
