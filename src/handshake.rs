@@ -120,7 +120,7 @@ pub fn generate_key() -> String {
   // a base64-encoded (see Section 4 of [RFC4648]) value that,
   // when decoded, is 16 bytes in length (RFC 6455)
   let r: [u8; 16] = rand::random();
-  STANDARD.encode(&r)
+  STANDARD.encode(r)
 }
 
 // https://github.com/snapview/tungstenite-rs/blob/314feea3055a93e585882fb769854a912a7e6dae/src/handshake/client.rs#L189

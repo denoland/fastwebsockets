@@ -165,6 +165,9 @@ mod recv;
 #[cfg_attr(docsrs, doc(cfg(feature = "upgrade")))]
 pub mod upgrade;
 
+use bytes::Buf;
+
+use bytes::BytesMut;
 #[cfg(feature = "unstable-split")]
 use std::future::Future;
 
@@ -202,12 +205,12 @@ pub(crate) struct WriteHalf {
 
 pub(crate) struct ReadHalf {
   role: Role,
-  spill: Option<Vec<u8>>,
   auto_apply_mask: bool,
   auto_close: bool,
   auto_pong: bool,
   writev_threshold: usize,
   max_message_size: usize,
+  buffer: BytesMut,
 }
 
 #[cfg(feature = "unstable-split")]
@@ -380,7 +383,6 @@ impl<'f, S> WebSocket<S> {
   where
     S: AsyncReadExt + AsyncWriteExt + Unpin,
   {
-    recv::init_once();
     Self {
       stream,
       write_half: WriteHalf::after_handshake(role),
@@ -557,12 +559,12 @@ impl ReadHalf {
   pub fn after_handshake(role: Role) -> Self {
     Self {
       role,
-      spill: None,
       auto_apply_mask: true,
       auto_close: true,
       auto_pong: true,
       writev_threshold: 1024,
       max_message_size: 64 << 20,
+      buffer: BytesMut::with_capacity(8192),
     }
   }
 
@@ -644,119 +646,91 @@ impl ReadHalf {
   {
     macro_rules! eof {
       ($n:expr) => {{
-        let n = $n;
-        if n == 0 {
+        if $n == 0 {
           return Err(WebSocketError::UnexpectedEOF);
         }
-        n
       }};
     }
 
-    let head = recv::init_once();
-    let mut nread = 0;
+    static MAX_HEADER_SIZE: usize = 14;
 
-    if let Some(spill) = self.spill.take() {
-      head[..spill.len()].copy_from_slice(&spill);
-      nread += spill.len();
+    // websocket max header size
+    self.buffer.reserve(MAX_HEADER_SIZE);
+
+    // Read the first two bytes
+    while self.buffer.remaining() < 2 {
+      eof!(stream.read_buf(&mut self.buffer).await?);
     }
 
-    while nread < 2 {
-      nread += eof!(stream.read(&mut head[nread..]).await?);
-    }
-
-    let fin = head[0] & 0b10000000 != 0;
-
-    let rsv1 = head[0] & 0b01000000 != 0;
-    let rsv2 = head[0] & 0b00100000 != 0;
-    let rsv3 = head[0] & 0b00010000 != 0;
+    let fin = self.buffer[0] & 0b10000000 != 0;
+    let rsv1 = self.buffer[0] & 0b01000000 != 0;
+    let rsv2 = self.buffer[0] & 0b00100000 != 0;
+    let rsv3 = self.buffer[0] & 0b00010000 != 0;
 
     if rsv1 || rsv2 || rsv3 {
       return Err(WebSocketError::ReservedBitsNotZero);
     }
 
-    let opcode = frame::OpCode::try_from(head[0] & 0b00001111)?;
-    let masked = head[1] & 0b10000000 != 0;
+    let opcode = frame::OpCode::try_from(self.buffer[0] & 0b00001111)?;
+    let masked = self.buffer[1] & 0b10000000 != 0;
 
-    let length_code = head[1] & 0x7F;
+    let length_code = self.buffer[1] & 0x7F;
     let extra = match length_code {
       126 => 2,
       127 => 8,
       _ => 0,
     };
 
-    if extra > 0 {
-      while nread < 2 + extra {
-        nread += eof!(stream.read(&mut head[nread..]).await?);
-      }
+    self.buffer.advance(2);
+    while self.buffer.remaining() < extra + masked as usize * 4 {
+      eof!(stream.read_buf(&mut self.buffer).await?);
     }
-    let length: usize = match extra {
+
+    let payload_len: usize = match extra {
       0 => usize::from(length_code),
-      2 => u16::from_be_bytes(head[2..4].try_into().unwrap()) as usize,
+      2 => self.buffer.get_u16() as usize,
       #[cfg(any(target_pointer_width = "64", target_pointer_width = "128"))]
-      8 => u64::from_be_bytes(head[2..10].try_into().unwrap()) as usize,
+      8 => self.buffer.get_u64() as usize,
       // On 32bit systems, usize is only 4bytes wide so we must check for usize overflowing
       #[cfg(any(
         target_pointer_width = "8",
         target_pointer_width = "16",
         target_pointer_width = "32"
       ))]
-      8 => match usize::try_from(u64::from_be_bytes(
-        head[2..10].try_into().unwrap(),
-      )) {
+      8 => match usize::try_from(self.buffer.get_u64()) {
         Ok(length) => length,
         Err(_) => return Err(WebSocketError::FrameTooLarge),
       },
       _ => unreachable!(),
     };
 
-    let mask = match masked {
-      true => {
-        while nread < 2 + extra + 4 {
-          nread += eof!(stream.read(&mut head[nread..]).await?);
-        }
-
-        Some(head[2 + extra..2 + extra + 4].try_into().unwrap())
-      }
-      false => None,
+    let mask = if masked {
+      Some(self.buffer.get_u32().to_be_bytes())
+    } else {
+      None
     };
 
     if frame::is_control(opcode) && !fin {
       return Err(WebSocketError::ControlFrameFragmented);
     }
 
-    if opcode == OpCode::Ping && length > 125 {
+    if opcode == OpCode::Ping && payload_len > 125 {
       return Err(WebSocketError::PingFrameTooLarge);
     }
 
-    if length >= self.max_message_size {
+    if payload_len >= self.max_message_size {
       return Err(WebSocketError::FrameTooLarge);
     }
 
-    let required = 2 + extra + mask.map(|_| 4).unwrap_or(0) + length;
-    if required > nread {
-      // Allocate more space
-      let mut new_head = head.to_vec();
-      new_head.resize(required, 0);
-
-      stream.read_exact(&mut new_head[nread..]).await?;
-      return Ok(Frame::new(
-        fin,
-        opcode,
-        mask,
-        Payload::Owned(new_head[required - length..].to_vec()),
-      ));
-    } else if nread > required {
-      // We read too much
-      self.spill = Some(head[required..nread].to_vec());
+    // Reserve a bit more to try to get next frame header and avoid a syscall to read it next time
+    self.buffer.reserve(payload_len + MAX_HEADER_SIZE);
+    while payload_len > self.buffer.remaining() {
+      eof!(stream.read_buf(&mut self.buffer).await?);
     }
 
-    let payload = &mut head[required - length..required];
-    let payload = if payload.len() > self.writev_threshold {
-      Payload::BorrowedMut(payload)
-    } else {
-      Payload::Owned(payload.to_vec())
-    };
-    let frame = Frame::new(fin, opcode, mask, payload);
+    // if we read too much it will stay in the buffer, for the next call to this method
+    let payload = self.buffer.split_to(payload_len);
+    let frame = Frame::new(fin, opcode, mask, Payload::Bytes(payload.freeze()));
     Ok(frame)
   }
 }

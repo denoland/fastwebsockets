@@ -125,7 +125,7 @@ fn unmask_fallback(buf: &mut [u8], mask: [u8; 4]) {
 /// Unmask a payload using the given 4-byte mask.
 #[inline]
 pub fn unmask(payload: &mut [u8], mask: [u8; 4]) {
-  return unmask_fallback(payload, mask);
+  unmask_fallback(payload, mask)
 }
 
 #[cfg(test)]
