@@ -159,7 +159,6 @@ mod frame;
 #[cfg_attr(docsrs, doc(cfg(feature = "upgrade")))]
 pub mod handshake;
 mod mask;
-mod recv;
 /// HTTP upgrades.
 #[cfg(feature = "upgrade")]
 #[cfg_attr(docsrs, doc(cfg(feature = "upgrade")))]
@@ -183,10 +182,6 @@ pub use crate::frame::Frame;
 pub use crate::frame::OpCode;
 pub use crate::frame::Payload;
 pub use crate::mask::unmask;
-use crate::recv::SharedRecv;
-
-#[derive(Copy, Clone, Default)]
-struct UnsendMarker(std::marker::PhantomData<SharedRecv>);
 
 #[derive(Copy, Clone, PartialEq)]
 pub enum Role {
@@ -217,14 +212,12 @@ pub(crate) struct ReadHalf {
 pub struct WebSocketRead<S> {
   stream: S,
   read_half: ReadHalf,
-  _marker: UnsendMarker,
 }
 
 #[cfg(feature = "unstable-split")]
 pub struct WebSocketWrite<S> {
   stream: S,
   write_half: WriteHalf,
-  _marker: UnsendMarker,
 }
 
 #[cfg(feature = "unstable-split")]
@@ -242,12 +235,10 @@ where
     WebSocketRead {
       stream: read,
       read_half: ReadHalf::after_handshake(role),
-      _marker: UnsendMarker::default(),
     },
     WebSocketWrite {
       stream: write,
       write_half: WriteHalf::after_handshake(role),
-      _marker: UnsendMarker::default(),
     },
   )
 }
@@ -356,7 +347,6 @@ pub struct WebSocket<S> {
   stream: S,
   write_half: WriteHalf,
   read_half: ReadHalf,
-  _marker: UnsendMarker,
 }
 
 impl<'f, S> WebSocket<S> {
@@ -387,7 +377,6 @@ impl<'f, S> WebSocket<S> {
       stream,
       write_half: WriteHalf::after_handshake(role),
       read_half: ReadHalf::after_handshake(role),
-      _marker: UnsendMarker::default(),
     }
   }
 
@@ -410,12 +399,10 @@ impl<'f, S> WebSocket<S> {
       WebSocketRead {
         stream: r,
         read_half: read,
-        _marker: UnsendMarker::default(),
       },
       WebSocketWrite {
         stream: w,
         write_half: write,
-        _marker: UnsendMarker::default(),
       },
     )
   }

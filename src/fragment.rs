@@ -17,7 +17,6 @@ use std::future::Future;
 
 use crate::error::WebSocketError;
 use crate::frame::Frame;
-use crate::recv::SharedRecv;
 use crate::OpCode;
 use crate::ReadHalf;
 use crate::WebSocket;
@@ -80,8 +79,6 @@ pub struct FragmentCollector<S> {
   read_half: ReadHalf,
   write_half: WriteHalf,
   fragments: Fragments,
-  // !Sync marker
-  _marker: std::marker::PhantomData<SharedRecv>,
 }
 
 impl<'f, S> FragmentCollector<S> {
@@ -96,7 +93,6 @@ impl<'f, S> FragmentCollector<S> {
       read_half,
       write_half,
       fragments: Fragments::new(),
-      _marker: std::marker::PhantomData,
     }
   }
 
@@ -146,8 +142,6 @@ pub struct FragmentCollectorRead<S> {
   stream: S,
   read_half: ReadHalf,
   fragments: Fragments,
-  // !Sync marker
-  _marker: std::marker::PhantomData<SharedRecv>,
 }
 
 #[cfg(feature = "unstable-split")]
@@ -162,7 +156,6 @@ impl<'f, S> FragmentCollectorRead<S> {
       stream,
       read_half,
       fragments: Fragments::new(),
-      _marker: std::marker::PhantomData,
     }
   }
 
