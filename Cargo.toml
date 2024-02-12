@@ -34,6 +34,7 @@ sha1 = { version = "0.10.5", optional = true }
 utf-8 = "0.7.5"
 rand = "0.8.4"
 thiserror = "1.0.40"
+bytes = "1.5.0"
 
 [features]
 default = ["simd"]

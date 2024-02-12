@@ -14,6 +14,7 @@
 
 use tokio::io::AsyncWriteExt;
 
+use bytes::Bytes;
 use core::ops::Deref;
 
 use crate::WebSocketError;
@@ -44,6 +45,7 @@ pub enum Payload<'a> {
   BorrowedMut(&'a mut [u8]),
   Borrowed(&'a [u8]),
   Owned(Vec<u8>),
+  Bytes(Bytes),
 }
 
 impl<'a> core::fmt::Debug for Payload<'a> {
@@ -60,6 +62,7 @@ impl Deref for Payload<'_> {
       Payload::Borrowed(borrowed) => borrowed,
       Payload::BorrowedMut(borrowed_mut) => borrowed_mut,
       Payload::Owned(owned) => owned.as_ref(),
+      Payload::Bytes(b) => b.as_ref(),
     }
   }
 }
@@ -88,6 +91,7 @@ impl From<Payload<'_>> for Vec<u8> {
       Payload::Borrowed(borrowed) => borrowed.to_vec(),
       Payload::BorrowedMut(borrowed_mut) => borrowed_mut.to_vec(),
       Payload::Owned(owned) => owned,
+      Payload::Bytes(b) => Vec::from(b),
     }
   }
 }
@@ -104,6 +108,13 @@ impl Payload<'_> {
       }
       Payload::BorrowedMut(borrowed) => borrowed,
       Payload::Owned(ref mut owned) => owned,
+      Payload::Bytes(b) => {
+        *self = Payload::Owned(b.to_vec());
+        match self {
+          Payload::Owned(owned) => owned,
+          _ => unreachable!(),
+        }
+      }
     }
   }
 }

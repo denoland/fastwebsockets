@@ -99,7 +99,7 @@ async fn connect(
     .body(Empty::<Bytes>::new())?;
 
   let (ws, _) = handshake::client(&SpawnExecutor, req, stream).await?;
-  Ok(ws.split(|s| tokio::io::split(s)))
+  Ok(ws.split(tokio::io::split))
 }
 
 async fn start_client(client_id: usize) -> Result<()> {

@@ -27,7 +27,7 @@ use tokio::net::TcpListener;
 
 async fn handle_client(fut: upgrade::UpgradeFut) -> Result<(), WebSocketError> {
   let ws = fut.await?;
-  let (rx, mut tx) = ws.split(|ws| tokio::io::split(ws));
+  let (rx, mut tx) = ws.split(tokio::io::split);
   let mut rx = FragmentCollectorRead::new(rx);
   loop {
     // Empty send_fn is fine because the benchmark does not create obligated writes.
