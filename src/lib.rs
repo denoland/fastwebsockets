@@ -14,7 +14,7 @@
 
 //! _fastwebsockets_ is a minimal, fast WebSocket server implementation.
 //!
-//! [https://github.com/littledivy/fastwebsockets](https://github.com/littledivy/fastwebsockets)
+//! [https://github.com/denoland/fastwebsockets](https://github.com/denoland/fastwebsockets)
 //!
 //! Passes the _Autobahn|TestSuite_ and fuzzed with LLVM's _libfuzzer_.
 //!

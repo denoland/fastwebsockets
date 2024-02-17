@@ -12,7 +12,7 @@ function load_test(conn, port, bytes) {
 }
 
 const targets = [
-  // https://github.com/littledivy/fastwebsockets
+  // https://github.com/denoland/fastwebsockets
   {
     port: 8080,
     name: "fastwebsockets",
