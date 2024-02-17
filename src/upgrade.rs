@@ -72,7 +72,7 @@ impl IncomingUpgrade {
 
 #[cfg(feature = "with_axum")]
 #[async_trait::async_trait]
-impl<S> axum::extract::FromRequestParts<S> for IncomingUpgrade
+impl<S> axum_core::extract::FromRequestParts<S> for IncomingUpgrade
 where
   S: Sync,
 {

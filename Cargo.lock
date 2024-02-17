@@ -396,6 +396,7 @@ dependencies = [
  "assert2",
  "async-trait",
  "axum",
+ "axum-core",
  "base64",
  "bytes",
  "criterion",
