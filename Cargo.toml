@@ -22,6 +22,11 @@ name = "tls_client"
 path = "examples/tls_client.rs"
 required-features = ["upgrade"]
 
+[[example]]
+name = "axum"
+path = "examples/axum.rs"
+required-features = ["upgrade", "with_axum"]
+
 [dependencies]
 tokio = { version = "1.25.0",  default-features = false, features = ["io-util"] }
 simdutf8 = { version = "0.1.4", optional = true }
@@ -35,16 +40,19 @@ utf-8 = "0.7.5"
 rand = "0.8.4"
 thiserror = "1.0.40"
 bytes = "1.5.0"
-# Axum example
-axum = "0.7.4"
-async-trait = "*"
-http = "1"
+
+# Axum integration
+axum = { version = "0.7.4", optional = true }
+http = { version = "1", optional = true }
+async-trait = { version = "0.1", optional = true }
 
 [features]
 default = ["simd"]
 simd = ["simdutf8/aarch64_neon"]
 upgrade = ["hyper", "pin-project", "base64", "sha1", "hyper-util", "http-body-util"]
 unstable-split = []
+# Axum integration
+with_axum = ["axum", "http", "async-trait"]
 
 [dev-dependencies]
 tokio = { version = "1.25.0", features = ["full", "macros"] }

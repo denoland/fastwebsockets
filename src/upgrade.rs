@@ -21,7 +21,6 @@
 use base64;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
-use http::request::Parts;
 use http_body_util::Empty;
 use hyper::body::Bytes;
 use hyper::Request;
@@ -71,6 +70,7 @@ impl IncomingUpgrade {
   }
 }
 
+#[cfg(feature = "with_axum")]
 #[async_trait::async_trait]
 impl<S> axum::extract::FromRequestParts<S> for IncomingUpgrade
 where
@@ -79,7 +79,7 @@ where
   type Rejection = ();
 
   async fn from_request_parts(
-    parts: &mut Parts,
+    parts: &mut http::request::Parts,
     _state: &S,
   ) -> Result<Self, Self::Rejection> {
     let key = parts.headers.get("Sec-WebSocket-Key").ok_or(())?;
