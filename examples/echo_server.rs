@@ -25,10 +25,7 @@ use hyper::Response;
 use tokio::net::TcpListener;
 
 async fn handle_client(fut: upgrade::UpgradeFut) -> Result<(), WebSocketError> {
-  let mut ws = fut.await?;
-  ws.set_auto_apply_mask(false);
-
-  let mut ws = fastwebsockets::FragmentCollector::new(ws);
+  let mut ws = fastwebsockets::FragmentCollector::new(fut.await?);
 
   loop {
     let frame = ws.read_frame().await?;
