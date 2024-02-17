@@ -21,6 +21,7 @@
 use base64;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
+use http::request::Parts;
 use http_body_util::Empty;
 use hyper::body::Bytes;
 use hyper::Request;
@@ -46,6 +47,61 @@ fn sec_websocket_protocol(key: &[u8]) -> String {
 }
 
 type Error = WebSocketError;
+
+pub struct IncomingUpgrade {
+  key: String,
+  on_upgrade: hyper::upgrade::OnUpgrade,
+}
+
+impl IncomingUpgrade {
+  pub fn upgrade(self) -> Result<(Response<Empty<Bytes>>, UpgradeFut), Error> {
+    let response = Response::builder()
+      .status(hyper::StatusCode::SWITCHING_PROTOCOLS)
+      .header(hyper::header::CONNECTION, "upgrade")
+      .header(hyper::header::UPGRADE, "websocket")
+      .header("Sec-WebSocket-Accept", self.key)
+      .body(Empty::new())
+      .expect("bug: failed to build response");
+
+    let stream = UpgradeFut {
+      inner: self.on_upgrade,
+    };
+
+    Ok((response, stream))
+  }
+}
+
+#[async_trait::async_trait]
+impl<S> axum::extract::FromRequestParts<S> for IncomingUpgrade
+where
+  S: Sync,
+{
+  type Rejection = ();
+
+  async fn from_request_parts(
+    parts: &mut Parts,
+    _state: &S,
+  ) -> Result<Self, Self::Rejection> {
+    let key = parts.headers.get("Sec-WebSocket-Key").ok_or(())?;
+    if parts
+      .headers
+      .get("Sec-WebSocket-Version")
+      .map(|v| v.as_bytes())
+      != Some(b"13")
+    {
+      return Err(());
+    }
+
+    let on_upgrade = parts
+      .extensions
+      .remove::<hyper::upgrade::OnUpgrade>()
+      .unwrap();
+    Ok(Self {
+      on_upgrade,
+      key: sec_websocket_protocol(key.as_bytes()),
+    })
+  }
+}
 
 /// A future that resolves to a websocket stream when the associated HTTP upgrade completes.
 #[pin_project]

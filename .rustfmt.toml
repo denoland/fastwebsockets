@@ -1,4 +1,4 @@
 max_width = 80
 tab_spaces = 2
 edition = "2021"
-imports_granularity = "Item"
+# imports_granularity = "Item"

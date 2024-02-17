@@ -35,6 +35,10 @@ utf-8 = "0.7.5"
 rand = "0.8.4"
 thiserror = "1.0.40"
 bytes = "1.5.0"
+# Axum example
+axum = "0.7.4"
+async-trait = "*"
+http = "1"
 
 [features]
 default = ["simd"]
