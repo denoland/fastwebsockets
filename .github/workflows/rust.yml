@@ -18,7 +18,7 @@ jobs:
     - name: Install latest nightly
       uses: actions-rs/toolchain@v1
       with:
-          toolchain: nightly-2023-05-06
+          toolchain: 1.76.0
           override: true
           components: rustfmt
     - uses: denoland/setup-deno@v1
