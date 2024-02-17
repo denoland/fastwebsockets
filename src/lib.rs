@@ -542,8 +542,12 @@ impl<'f, S> WebSocket<S> {
   }
 }
 
+const MAX_HEADER_SIZE: usize = 14;
+
 impl ReadHalf {
   pub fn after_handshake(role: Role) -> Self {
+    let mut buffer = BytesMut::with_capacity(8192);
+
     Self {
       role,
       auto_apply_mask: true,
@@ -551,7 +555,7 @@ impl ReadHalf {
       auto_pong: true,
       writev_threshold: 1024,
       max_message_size: 64 << 20,
-      buffer: BytesMut::with_capacity(8192),
+      buffer,
     }
   }
 
@@ -561,7 +565,6 @@ impl ReadHalf {
   /// has been closed.
   ///
   /// XXX: Do not expose this method to the public API.
-  /// Lifetime requirements for safe recv buffer use are not enforced.
   pub(crate) async fn read_frame_inner<'f, S>(
     &mut self,
     stream: &mut S,
@@ -639,11 +642,6 @@ impl ReadHalf {
       }};
     }
 
-    static MAX_HEADER_SIZE: usize = 14;
-
-    // websocket max header size
-    self.buffer.reserve(MAX_HEADER_SIZE);
-
     // Read the first two bytes
     while self.buffer.remaining() < 2 {
       eof!(stream.read_buf(&mut self.buffer).await?);
@@ -717,7 +715,7 @@ impl ReadHalf {
 
     // if we read too much it will stay in the buffer, for the next call to this method
     let payload = self.buffer.split_to(payload_len);
-    let frame = Frame::new(fin, opcode, mask, Payload::Bytes(payload.freeze()));
+    let frame = Frame::new(fin, opcode, mask, Payload::Bytes(payload));
     Ok(frame)
   }
 }
