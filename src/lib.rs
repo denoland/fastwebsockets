@@ -159,10 +159,15 @@ mod frame;
 #[cfg_attr(docsrs, doc(cfg(feature = "upgrade")))]
 pub mod handshake;
 mod mask;
+mod rt;
 /// HTTP upgrades.
 #[cfg(feature = "upgrade")]
 #[cfg_attr(docsrs, doc(cfg(feature = "upgrade")))]
 pub mod upgrade;
+
+/// futures::io Async traits
+#[cfg(feature = "futures")]
+pub mod futures;
 
 use bytes::Buf;
 
