@@ -48,14 +48,13 @@ async-trait = { version = "0.1", optional = true }
 
 
 # Futrues integration
-futures-io = {version = "0.3.30", optional = true}
-futures-lite = "2.2.0"
+futures-lite =  {version = "2.2.0", optional = true}
 
 [features]
 default = ["simd", "futures", "upgrade"]
 simd = ["simdutf8/aarch64_neon"]
 upgrade = ["hyper", "pin-project", "base64", "sha1", "hyper-util", "http-body-util"]
-futures = ["futures-io"]
+futures = ["futures-lite"]
 unstable-split = []
 # Axum integration
 with_axum = ["axum-core", "http", "async-trait"]

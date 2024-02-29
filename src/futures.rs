@@ -57,7 +57,7 @@ impl<T: ?Sized> FuturesIo<T> {
 #[cfg(feature = "upgrade")]
 impl<T> hyper::rt::Read for FuturesIo<T>
 where
-  T: futures_io::AsyncRead + ?Sized,
+  T: futures_lite::AsyncRead + ?Sized,
 {
   #[inline]
   fn poll_read(
@@ -91,7 +91,7 @@ where
 #[cfg(feature = "upgrade")]
 impl<T> hyper::rt::Write for FuturesIo<T>
 where
-  T: futures_io::AsyncWrite,
+  T: futures_lite::AsyncWrite,
 {
   #[inline]
   fn poll_write(
