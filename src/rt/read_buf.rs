@@ -1,20 +1,19 @@
 use bytes::BufMut;
+use futures_lite::ready;
 use futures_lite::AsyncRead;
 use pin_project::pin_project;
 use std::future::Future;
-use std::marker::PhantomPinned;
 use std::pin::Pin;
 use std::task::{Context, Poll};
-use std::{io, iop, mem};
+use std::{io, mem};
 
 #[pin_project]
 #[derive(Debug)]
 #[must_use = "Futures do nothing unless polled"]
 struct ReadBuf<'a, R: ?Sized, B: ?Sized> {
+  #[pin]
   reader: &'a mut R,
   buf: &'a mut B,
-  #[pin]
-  _pin: PhantomPinned,
 }
 
 pub(crate) fn read_buf<'a, R, B>(
@@ -25,11 +24,7 @@ where
   R: AsyncRead + Unpin + ?Sized,
   B: BufMut + ?Sized,
 {
-  ReadBuf {
-    reader,
-    buf,
-    _pin: PhantomPinned,
-  }
+  ReadBuf { reader, buf }
 }
 
 impl<R, B> Future for ReadBuf<'_, R, B>
@@ -39,26 +34,20 @@ where
 {
   type Output = io::Result<usize>;
   fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-    let me = self.project();
-    if !me.buf.has_remaining_mut() {
+    let this = self.project();
+    if !this.buf.has_remaining_mut() {
       return Poll::Ready(Ok(0));
     }
-    let n = unsafe {
-      let dst =
-        &mut *(me.buf.chunk_mut() as *mut _ as *mut [mem::MaybeUninit<u8>]);
-      let mut buf = tokio::io::ReadBuf::uninit(dst);
-      let ptr = buf.filled().as_ptr();
-      if AsyncRead::poll_read(Pin::new(me.reader), cx, &mut buf)?.is_pending() {
-        return Poll::Pending;
-      }
-
-      assert_eq!(ptr, buf.filled().as_ptr());
-      buf.filled().len()
+    let n = {
+      let spare = unsafe {
+        &mut *(this.buf.chunk_mut() as *mut _ as *mut [mem::MaybeUninit<u8>])
+      };
+      let mut buf = tokio::io::ReadBuf::uninit(spare);
+      ready!(this.reader.poll_read(cx, buf.initialize_unfilled()))?
     };
     unsafe {
-      me.buf.advance_mut(n);
+      this.buf.advance_mut(n);
     }
-
     Poll::Ready(Ok(n))
   }
 }
