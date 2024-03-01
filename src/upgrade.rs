@@ -19,7 +19,7 @@
 // limitations under the License.
 
 #[cfg(feature = "futures")]
-use crate::rt::FuturesIo;
+use crate::rt::FuturesIo as AsyncIo;
 use base64;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
@@ -28,7 +28,7 @@ use hyper::body::Bytes;
 use hyper::Request;
 use hyper::Response;
 #[cfg(not(feature = "futures"))]
-use hyper_util::rt::TokioIo;
+use hyper_util::rt::TokioIo as AsyncIo;
 use pin_project::pin_project;
 use sha1::Digest;
 use sha1::Sha1;
@@ -218,9 +218,8 @@ fn trim_end(data: &[u8]) -> &[u8] {
   }
 }
 
-#[cfg(not(feature = "futures"))]
 impl std::future::Future for UpgradeFut {
-  type Output = Result<WebSocket<TokioIo<hyper::upgrade::Upgraded>>, Error>;
+  type Output = Result<WebSocket<AsyncIo<hyper::upgrade::Upgraded>>, Error>;
 
   fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
     let this = self.project();
@@ -229,25 +228,7 @@ impl std::future::Future for UpgradeFut {
       Poll::Ready(x) => x,
     };
     Poll::Ready(Ok(WebSocket::after_handshake(
-      TokioIo::new(upgraded?),
-      Role::Server,
-    )))
-  }
-}
-
-#[cfg(feature = "futures")]
-impl std::future::Future for UpgradeFut {
-  type Output = Result<WebSocket<FuturesIo<hyper::upgrade::Upgraded>>, Error>;
-
-  fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-    let this = self.project();
-    let upgraded = match this.inner.poll(cx) {
-      Poll::Pending => return Poll::Pending,
-      Poll::Ready(x) => x,
-    };
-
-    Poll::Ready(Ok(WebSocket::after_handshake(
-      FuturesIo::new(upgraded?),
+      AsyncIo::new(upgraded?),
       Role::Server,
     )))
   }

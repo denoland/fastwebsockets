@@ -24,25 +24,6 @@ pub trait Write {
   ) -> impl Future<Output = io::Result<()>> + '_;
 }
 
-// #[cfg(not(features = "futures"))]
-// mod tokio {
-//   use super::Read;
-//   use bytes::BufMut;
-//   use hyper_util::rt::tokio;
-//   use std::future::Future;
-//   use std::{io, ops::Deref};
-//   use tokio::io::AsyncReadExt;
-//
-//   impl Read for tokio::io::AsyncReadExt {
-//     async fn read_buf<B: BufMut + ?Sized>(
-//       &mut self,
-//       buf: &mut B,
-//     ) -> io::Result<usize> {
-//       AsyncReadExt
-//     }
-//   }
-// }
-
 #[cfg(not(feature = "futures"))]
 impl<T: tokio::io::AsyncReadExt + Unpin> Read for T {
   fn read_buf<'a, B: BufMut + ?Sized>(

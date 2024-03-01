@@ -166,11 +166,6 @@ pub use rt::FuturesIo;
 #[cfg(feature = "upgrade")]
 #[cfg_attr(docsrs, doc(cfg(feature = "upgrade")))]
 pub mod upgrade;
-
-/// futures::io Async traits
-#[cfg(feature = "futures")]
-pub mod futures;
-
 use bytes::Buf;
 
 use bytes::BytesMut;
