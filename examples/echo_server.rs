@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#[cfg(feature = "futures")]
+use async_std::net::TcpListener;
 use fastwebsockets::upgrade;
 use fastwebsockets::OpCode;
 use fastwebsockets::WebSocketError;
@@ -22,6 +24,7 @@ use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::Request;
 use hyper::Response;
+#[cfg(not(feature = "futures"))]
 use tokio::net::TcpListener;
 
 async fn handle_client(fut: upgrade::UpgradeFut) -> Result<(), WebSocketError> {
@@ -45,36 +48,67 @@ async fn server_upgrade(
 ) -> Result<Response<Empty<Bytes>>, WebSocketError> {
   let (response, fut) = upgrade::upgrade(&mut req)?;
 
+  #[cfg(not(feature = "futures"))]
   tokio::task::spawn(async move {
     if let Err(e) = tokio::task::unconstrained(handle_client(fut)).await {
       eprintln!("Error in websocket connection: {}", e);
     }
   });
 
+  #[cfg(feature = "futures")]
+  async_std::task::spawn(async move {
+    if let Err(e) = handle_client(fut).await {
+      eprintln!("Error in websocket connection: {}", e);
+    }
+  });
   Ok(response)
 }
 
 fn main() -> Result<(), WebSocketError> {
-  let rt = tokio::runtime::Builder::new_current_thread()
-    .enable_io()
-    .build()
-    .unwrap();
+  #[cfg(feature = "futures")]
+  {
+    async_std::task::block_on(async move {
+      let listener = TcpListener::bind("127.0.0.1:8080").await?;
+      println!("Server started, listening on {}", "127.0.0.1:8080");
+      loop {
+        let (stream, _) = listener.accept().await?;
+        println!("client connected");
+        async_std::task::spawn(async move {
+          let io = fastwebsockets::FuturesIo::new(stream);
+          let conn_fut = http1::Builder::new()
+            .serve_connection(io, service_fn(server_upgrade))
+            .with_upgrades();
+          if let Err(e) = conn_fut.await {
+            println!("An error occured {:?}", e);
+          }
+        });
+      }
+    })
+  }
 
-  rt.block_on(async move {
-    let listener = TcpListener::bind("127.0.0.1:8080").await?;
-    println!("Server started, listening on {}", "127.0.0.1:8080");
-    loop {
-      let (stream, _) = listener.accept().await?;
-      println!("Client connected");
-      tokio::spawn(async move {
-        let io = hyper_util::rt::TokioIo::new(stream);
-        let conn_fut = http1::Builder::new()
-          .serve_connection(io, service_fn(server_upgrade))
-          .with_upgrades();
-        if let Err(e) = conn_fut.await {
-          println!("An error occurred: {:?}", e);
-        }
-      });
-    }
-  })
+  #[cfg(not(feature = "futures"))]
+  {
+    let rt = tokio::runtime::Builder::new_current_thread()
+      .enable_io()
+      .build()
+      .unwrap();
+
+    rt.block_on(async move {
+      let listener = TcpListener::bind("127.0.0.1:8080").await?;
+      println!("Server started, listening on {}", "127.0.0.1:8080");
+      loop {
+        let (stream, _) = listener.accept().await?;
+        println!("Client connected");
+        tokio::spawn(async move {
+          let io = hyper_util::rt::TokioIo::new(stream);
+          let conn_fut = http1::Builder::new()
+            .serve_connection(io, service_fn(server_upgrade))
+            .with_upgrades();
+          if let Err(e) = conn_fut.await {
+            println!("An error occurred: {:?}", e);
+          }
+        });
+      }
+    })
+  }
 }
