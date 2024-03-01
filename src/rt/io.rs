@@ -1,8 +1,8 @@
+#[cfg(feature = "futures")]
+use super::read_buf;
 use bytes::BufMut;
 use std::future::Future;
-use std::io::Result;
 use std::io::{self, IoSlice};
-use std::pin::Pin;
 
 // Read bytes from a source
 pub trait Read {
@@ -13,8 +13,15 @@ pub trait Read {
 }
 
 pub trait Write {
-  async fn write_vectored(&mut self, bufs: &[IoSlice<'_>])
-    -> io::Result<usize>;
+  fn write_vectored<'a>(
+    &'a mut self,
+    bufs: &'a [IoSlice<'_>],
+  ) -> impl Future<Output = io::Result<usize>> + '_;
+
+  fn write_all<'a>(
+    &'a mut self,
+    src: &'a [u8],
+  ) -> impl Future<Output = io::Result<()>> + '_;
 }
 
 // #[cfg(not(features = "futures"))]
@@ -46,13 +53,46 @@ impl<T: tokio::io::AsyncReadExt + Unpin> Read for T {
   }
 }
 
+#[cfg(not(feature = "futures"))]
+impl<T: tokio::io::AsyncWriteExt + Unpin> Write for T {
+  fn write_all<'a>(
+    &'a mut self,
+    src: &'a [u8],
+  ) -> impl Future<Output = io::Result<()>> + '_ {
+    self.write_all(src)
+  }
+
+  fn write_vectored<'a>(
+    &'a mut self,
+    bufs: &'a [IoSlice<'_>],
+  ) -> impl Future<Output = io::Result<usize>> + '_ {
+    self.write_vectored(bufs)
+  }
+}
+
 #[cfg(feature = "futures")]
 impl<T: futures_lite::AsyncReadExt + Unpin> Read for T {
   fn read_buf<'a, B: BufMut + ?Sized>(
     &'a mut self,
     buf: &'a mut B,
   ) -> impl Future<Output = io::Result<usize>> + '_ {
-    let dst = unsafe { &mut *(buf.chunk_mut() as *mut _ as *mut [u8]) };
-    let n = self.read(dst);
+    read_buf::read_buf(self, buf)
+  }
+}
+
+#[cfg(feature = "futures")]
+impl<T: futures_lite::AsyncWriteExt + Unpin> Write for T {
+  fn write_all<'a>(
+    &'a mut self,
+    src: &'a [u8],
+  ) -> impl Future<Output = io::Result<()>> + '_ {
+    self.write_all(src)
+  }
+
+  fn write_vectored<'a>(
+    &'a mut self,
+    bufs: &'a [IoSlice<'_>],
+  ) -> impl Future<Output = io::Result<usize>> + '_ {
+    self.write_vectored(bufs)
   }
 }

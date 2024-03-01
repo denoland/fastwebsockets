@@ -3,6 +3,7 @@ use futures_lite::ready;
 use futures_lite::AsyncRead;
 use pin_project::pin_project;
 use std::future::Future;
+use std::marker::PhantomPinned;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::{io, mem};
@@ -10,10 +11,11 @@ use std::{io, mem};
 #[pin_project]
 #[derive(Debug)]
 #[must_use = "Futures do nothing unless polled"]
-struct ReadBuf<'a, R: ?Sized, B: ?Sized> {
-  #[pin]
+pub(crate) struct ReadBuf<'a, R: ?Sized, B: ?Sized> {
   reader: &'a mut R,
   buf: &'a mut B,
+  #[pin]
+  _pin: PhantomPinned,
 }
 
 pub(crate) fn read_buf<'a, R, B>(
@@ -24,7 +26,11 @@ where
   R: AsyncRead + Unpin + ?Sized,
   B: BufMut + ?Sized,
 {
-  ReadBuf { reader, buf }
+  ReadBuf {
+    reader,
+    buf,
+    _pin: PhantomPinned,
+  }
 }
 
 impl<R, B> Future for ReadBuf<'_, R, B>
@@ -43,7 +49,7 @@ where
         &mut *(this.buf.chunk_mut() as *mut _ as *mut [mem::MaybeUninit<u8>])
       };
       let mut buf = tokio::io::ReadBuf::uninit(spare);
-      ready!(this.reader.poll_read(cx, buf.initialize_unfilled()))?
+      ready!(Pin::new(this.reader).poll_read(cx, buf.initialize_unfilled()))?
     };
     unsafe {
       this.buf.advance_mut(n);

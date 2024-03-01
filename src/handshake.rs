@@ -12,6 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#[cfg(feature = "futures")]
+use crate::rt::FuturesIo;
+#[cfg(feature = "futures")]
+use futures_lite::{AsyncRead, AsyncWrite};
 use hyper::body::Incoming;
 use hyper::upgrade::Upgraded;
 use hyper::Request;
@@ -21,9 +25,10 @@ use hyper::StatusCode;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 
+#[cfg(not(feature = "futures"))]
 use hyper_util::rt::TokioIo;
-use tokio::io::AsyncRead;
-use tokio::io::AsyncWrite;
+#[cfg(not(feature = "futures"))]
+use tokio::io::{AsyncRead, AsyncWrite};
 
 use std::future::Future;
 use std::pin::Pin;
@@ -82,6 +87,8 @@ use crate::WebSocketError;
 ///   }
 /// }
 /// ```
+
+#[cfg(not(feature = "futures"))]
 pub async fn client<S, E, B>(
   executor: &E,
   request: Request<B>,
@@ -109,6 +116,40 @@ where
   match hyper::upgrade::on(&mut response).await {
     Ok(upgraded) => Ok((
       WebSocket::after_handshake(TokioIo::new(upgraded), Role::Client),
+      response,
+    )),
+    Err(e) => Err(e.into()),
+  }
+}
+
+#[cfg(feature = "futures")]
+pub async fn client<S, E, B>(
+  executor: &E,
+  request: Request<B>,
+  socket: S,
+) -> Result<(WebSocket<FuturesIo<Upgraded>>, Response<Incoming>), WebSocketError>
+where
+  S: AsyncRead + AsyncWrite + Send + Unpin + 'static,
+  E: hyper::rt::Executor<Pin<Box<dyn Future<Output = ()> + Send>>>,
+  B: hyper::body::Body + 'static + Send,
+  B::Data: Send,
+  B::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
+{
+  let (mut sender, conn) =
+    hyper::client::conn::http1::handshake(FuturesIo::new(socket)).await?;
+  let fut = Box::pin(async move {
+    if let Err(e) = conn.with_upgrades().await {
+      eprintln!("Error polling connection: {}", e);
+    }
+  });
+  executor.execute(fut);
+
+  let mut response = sender.send_request(request).await?;
+  verify(&response)?;
+
+  match hyper::upgrade::on(&mut response).await {
+    Ok(upgraded) => Ok((
+      WebSocket::after_handshake(FuturesIo::new(upgraded), Role::Client),
       response,
     )),
     Err(e) => Err(e.into()),
