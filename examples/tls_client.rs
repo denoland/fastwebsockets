@@ -18,19 +18,17 @@ use async_std::net::TcpStream;
 use fastwebsockets::FuturesIo as IoWrapper;
 #[cfg(feature = "futures")]
 use futures_rustls::{
-  rustls::{
-    pki_types::{self, TrustAnchor},
-    ClientConfig, RootCertStore,
-  },
+  rustls::{self, ClientConfig, OwnedTrustAnchor, RootCertStore},
   TlsConnector,
 };
+
 #[cfg(not(feature = "futures"))]
 use hyper_util::rt::TokioIo as IoWrapper;
 #[cfg(not(feature = "futures"))]
 use tokio::net::TcpStream;
 #[cfg(not(feature = "futures"))]
 use tokio_rustls::{
-  rustls::{ClientConfig, OwnedTrustAnchor, RootCertStore},
+  rustls::{self, ClientConfig, OwnedTrustAnchor, RootCertStore},
   TlsConnector,
 };
 
@@ -52,7 +50,6 @@ where
 
 fn tls_connector() -> Result<TlsConnector> {
   let mut root_store = RootCertStore::empty();
-  #[cfg(not(feature = "futures"))]
   root_store.add_trust_anchors(webpki_roots::TLS_SERVER_ROOTS.iter().map(
     |ta| {
       OwnedTrustAnchor::from_subject_spki_name_constraints(
@@ -63,23 +60,8 @@ fn tls_connector() -> Result<TlsConnector> {
     },
   ));
 
-  #[cfg(feature = "futures")]
-  root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().map(|ta| {
-    let ta = ta.to_owned();
-    TrustAnchor {
-      subject: ta.subject.into(),
-      subject_public_key_info: ta.spki.into(),
-      name_constraints: ta.name_constraints.map(Into::into),
-    }
-  }));
-
-  #[cfg(not(feature = "futures"))]
   let config = ClientConfig::builder()
     .with_safe_defaults()
-    .with_root_certificates(root_store)
-    .with_no_client_auth();
-  #[cfg(feature = "futures")]
-  let config = ClientConfig::builder()
     .with_root_certificates(root_store)
     .with_no_client_auth();
   Ok(TlsConnector::from(Arc::new(config)))
@@ -93,18 +75,9 @@ async fn connect(
 
   let tcp_stream = TcpStream::connect(&addr).await?;
   let tls_connector = tls_connector().unwrap();
-  #[cfg(not(feature = "futures"))]
-  let domain =
-    tokio_rustls::rustls::ServerName::try_from(domain).map_err(|_| {
-      std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid dnsname")
-    })?;
-
-  #[cfg(feature = "futures")]
-  let domain = pki_types::ServerName::try_from(domain)
-    .map_err(|_| {
-      std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid dnsname")
-    })?
-    .to_owned();
+  let domain = rustls::ServerName::try_from(domain).map_err(|_| {
+    std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid dnsname")
+  })?;
 
   let tls_stream = tls_connector.connect(domain, tcp_stream).await?;
 

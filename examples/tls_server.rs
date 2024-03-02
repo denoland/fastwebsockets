@@ -23,11 +23,20 @@ use hyper::service::service_fn;
 use hyper::Request;
 use hyper::Response;
 use std::sync::Arc;
+
+#[cfg(not(feature = "futures"))]
 use tokio::net::TcpListener;
-use tokio_rustls::rustls;
-use tokio_rustls::rustls::Certificate;
-use tokio_rustls::rustls::PrivateKey;
-use tokio_rustls::TlsAcceptor;
+#[cfg(not(feature = "futures"))]
+use tokio_rustls::{
+  rustls, rustls::Certificate, rustls::PrivateKey, TlsAcceptor,
+};
+
+#[cfg(feature = "futures")]
+use async_std::net::TcpListener;
+#[cfg(feature = "futures")]
+use futures_rustls::{
+  rustls, rustls::Certificate, rustls::PrivateKey, TlsAcceptor,
+};
 
 async fn handle_client(fut: upgrade::UpgradeFut) -> Result<()> {
   let mut ws = fut.await?;
@@ -53,7 +62,15 @@ async fn server_upgrade(
 ) -> Result<Response<Empty<Bytes>>> {
   let (response, fut) = upgrade::upgrade(&mut req)?;
 
+  #[cfg(not(feature = "futures"))]
   tokio::spawn(async move {
+    if let Err(e) = handle_client(fut).await {
+      eprintln!("Error in websocket connection: {}", e);
+    }
+  });
+
+  #[cfg(feature = "futures")]
+  async_std::task::spawn(async move {
     if let Err(e) = handle_client(fut).await {
       eprintln!("Error in websocket connection: {}", e);
     }
@@ -81,7 +98,19 @@ fn tls_acceptor() -> Result<TlsAcceptor> {
   Ok(TlsAcceptor::from(Arc::new(config)))
 }
 
-#[tokio::main(flavor = "current_thread")]
+macro_rules! runtime_main {
+    ($($body:tt)*) => {
+        #[cfg(feature = "futures")]
+        #[async_std::main]
+        $($body)*
+
+        #[cfg(not(feature = "futures"))]
+        #[tokio::main(flavor = "current_thread")]
+        $($body)*
+    };
+}
+
+runtime_main! {
 async fn main() -> Result<()> {
   let acceptor = tls_acceptor()?;
   let listener = TcpListener::bind("127.0.0.1:8080").await?;
@@ -101,4 +130,5 @@ async fn main() -> Result<()> {
       }
     });
   }
+}
 }
