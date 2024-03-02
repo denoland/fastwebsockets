@@ -121,7 +121,10 @@ async fn main() -> Result<()> {
     let acceptor = acceptor.clone();
     tokio::spawn(async move {
       let stream = acceptor.accept(stream).await.unwrap();
+      #[cfg(not(feature = "futures"))]
       let io = hyper_util::rt::TokioIo::new(stream);
+      #[cfg(feature = "futures")]
+      let io = fastwebsockets::FuturesIo::new(stream);
       let conn_fut = http1::Builder::new()
         .serve_connection(io, service_fn(server_upgrade))
         .with_upgrades();
