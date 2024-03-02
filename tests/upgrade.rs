@@ -9,10 +9,24 @@ use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::Request;
 use hyper::Response;
-use hyper_util::rt::TokioIo;
+
+#[cfg(feature = "futures")]
+use fastwebsockets::FuturesIo as IoWrapper;
+#[cfg(not(feature = "futures"))]
+use hyper_util::rt::TokioIo as IoWrapper;
+
+#[cfg(feature = "futures")]
+use async_std::{
+  net::{TcpListener, TcpStream},
+  task::spawn,
+};
 use std::future::Future;
 use std::net::Ipv6Addr;
-use tokio::net::TcpStream;
+#[cfg(not(feature = "futures"))]
+use tokio::{
+  net::{TcpListener, TcpStream},
+  spawn,
+};
 
 use assert2::assert;
 use assert2::let_assert;
@@ -25,26 +39,38 @@ where
   Fut::Output: Send + 'static,
 {
   fn execute(&self, fut: Fut) {
-    tokio::spawn(fut);
+    spawn(fut);
   }
 }
 
-#[tokio::test]
+macro_rules! runtime_test {
+    ($($body:tt)*) => {
+        #[cfg(feature = "futures")]
+        #[async_std::test]
+        $($body)*
+
+        #[cfg(not(feature = "futures"))]
+        #[tokio::test]
+        $($body)*
+    };
+}
+
+runtime_test! {
 async fn hyper() {
   // Bind a TCP listener to an ephemeral port.
   let_assert!(
     Ok(listener) =
-      tokio::net::TcpListener::bind((Ipv6Addr::LOCALHOST, 0u16)).await
+      TcpListener::bind((Ipv6Addr::LOCALHOST, 0u16)).await
   );
   let_assert!(Ok(bind_addr) = listener.local_addr());
 
   // Spawn the server in a task.
-  tokio::spawn(async move {
+  spawn(async move {
     loop {
       let (stream, _) = listener.accept().await.unwrap();
-      let io = TokioIo::new(stream);
+      let io = IoWrapper::new(stream);
 
-      tokio::spawn(async move {
+      spawn(async move {
         if let Err(err) = http1::Builder::new()
           .serve_connection(io, service_fn(upgrade_websocket))
           .with_upgrades()
@@ -86,6 +112,7 @@ async fn hyper() {
   let_assert!(Ok(close_frame) = stream.read_frame().await);
   assert!(close_frame.opcode == fastwebsockets::OpCode::Close);
 }
+}
 
 async fn upgrade_websocket(
   mut request: Request<Incoming>,
@@ -93,7 +120,7 @@ async fn upgrade_websocket(
   assert!(fastwebsockets::upgrade::is_upgrade_request(&request) == true);
 
   let (response, stream) = fastwebsockets::upgrade::upgrade(&mut request)?;
-  tokio::spawn(async move {
+  spawn(async move {
     let_assert!(Ok(mut stream) = stream.await);
     assert!(let Ok(()) = stream.write_frame(fastwebsockets::Frame::text(b"Hello!".to_vec().into())).await);
     let_assert!(Ok(reply) = stream.read_frame().await);

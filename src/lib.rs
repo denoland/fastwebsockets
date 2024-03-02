@@ -764,6 +764,10 @@ impl WriteHalf {
 #[cfg(test)]
 mod tests {
   use super::*;
+  #[cfg(feature = "futures")]
+  use async_std::net::TcpStream;
+  #[cfg(not(feature = "futures"))]
+  use tokio::net::TcpStream;
 
   const _: () = {
     const fn assert_unsync<S>() {
@@ -787,6 +791,6 @@ mod tests {
       // `$x` implements `AmbiguousIfImpl<Invalid>`.
       let _ = <S as AmbiguousIfImpl<_>>::some_item;
     }
-    assert_unsync::<WebSocket<tokio::net::TcpStream>>();
+    assert_unsync::<WebSocket<TcpStream>>();
   };
 }

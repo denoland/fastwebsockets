@@ -23,16 +23,29 @@ use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::Request;
 use hyper::Response;
-use hyper_util::rt::TokioIo;
-use tokio::net::TcpListener;
+#[cfg(not(feature = "futures"))]
+use hyper_util::rt::TokioIo as IoWrapper;
 
+#[cfg(feature = "futures")]
+use fastwebsockets::FuturesIo as IoWrapper;
+
+#[cfg(not(feature = "futures"))]
+use tokio::{
+  net::{TcpListener, TcpStream},
+  spawn,
+};
+
+#[cfg(feature = "futures")]
+use async_std::{
+  net::{TcpListener, TcpStream},
+  task::spawn,
+};
 use fastwebsockets::handshake;
 use fastwebsockets::WebSocket;
 use hyper::header::CONNECTION;
 use hyper::header::UPGRADE;
 use hyper::upgrade::Upgraded;
 use std::future::Future;
-use tokio::net::TcpStream;
 
 const N_CLIENTS: usize = 20;
 
@@ -64,14 +77,21 @@ async fn server_upgrade(
     .unwrap()
     .parse()
     .unwrap();
+
+  #[cfg(not(feature = "futures"))]
   tokio::spawn(async move {
+    handle_client(client_id, fut).await.unwrap();
+  });
+
+  #[cfg(feature = "futures")]
+  async_std::task::spawn(async move {
     handle_client(client_id, fut).await.unwrap();
   });
 
   Ok(response)
 }
 
-async fn connect(client_id: usize) -> Result<WebSocket<TokioIo<Upgraded>>> {
+async fn connect(client_id: usize) -> Result<WebSocket<IoWrapper<Upgraded>>> {
   let stream = TcpStream::connect("localhost:8080").await?;
 
   let req = Request::builder()
@@ -108,30 +128,52 @@ async fn start_client(client_id: usize) -> Result<()> {
   Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn test() -> Result<()> {
-  let listener = TcpListener::bind("127.0.0.1:8080").await?;
-  println!("Server started, listening on {}", "127.0.0.1:8080");
-  tokio::spawn(async move {
-    loop {
-      let (stream, _) = listener.accept().await.unwrap();
-      tokio::spawn(async move {
-        let io = TokioIo::new(stream);
-        let conn_fut = http1::Builder::new()
-          .serve_connection(io, service_fn(server_upgrade))
-          .with_upgrades();
-        conn_fut.await.unwrap();
-      });
+macro_rules! runtime_test {
+    ($($body:tt)*) => {
+        #[cfg(feature = "futures")]
+        #[async_std::test]
+        $($body)*
+
+        #[cfg(not(feature = "futures"))]
+        #[tokio::test(flavor = "multi_thread")]
+        $($body)*
+    };
+}
+
+runtime_test! {
+    async fn test() -> Result<()> {
+        let listener = TcpListener::bind("127.0.0.1:8080").await?;
+        println!("Server started, listening on {}", "127.0.0.1:8080");
+        spawn(async move {
+            loop {
+                let (stream, _) = listener.accept().await.unwrap();
+                spawn(async move {
+                    let io = IoWrapper::new(stream);
+                    let conn_fut = http1::Builder::new()
+                        .serve_connection(io, service_fn(server_upgrade))
+                        .with_upgrades();
+                    conn_fut.await.unwrap();
+                });
+            }
+        });
+        let mut tasks = Vec::with_capacity(N_CLIENTS);
+        for client in 0..N_CLIENTS {
+            tasks.push(spawn(start_client(client)));
+        }
+        for handle in tasks {
+
+            #[cfg(not(feature = "futures"))]
+            {
+                handle.await.unwrap().unwrap()
+            }
+            #[cfg(feature = "futures")]
+            {
+
+                handle.await.unwrap()
+            }
+        }
+        Ok(())
     }
-  });
-  let mut tasks = Vec::with_capacity(N_CLIENTS);
-  for client in 0..N_CLIENTS {
-    tasks.push(tokio::spawn(start_client(client)));
-  }
-  for handle in tasks {
-    handle.await.unwrap().unwrap();
-  }
-  Ok(())
 }
 
 struct SpawnExecutor;
@@ -142,6 +184,10 @@ where
   Fut::Output: Send + 'static,
 {
   fn execute(&self, fut: Fut) {
+    #[cfg(not(feature = "futures"))]
     tokio::task::spawn(fut);
+
+    #[cfg(feature = "futures")]
+    async_std::task::spawn(fut);
   }
 }
