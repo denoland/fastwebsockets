@@ -159,19 +159,18 @@ mod frame;
 #[cfg_attr(docsrs, doc(cfg(feature = "upgrade")))]
 pub mod handshake;
 mod mask;
+mod rt;
+#[cfg(feature = "futures")]
+pub use rt::FuturesIo;
 /// HTTP upgrades.
 #[cfg(feature = "upgrade")]
 #[cfg_attr(docsrs, doc(cfg(feature = "upgrade")))]
 pub mod upgrade;
-
 use bytes::Buf;
 
 use bytes::BytesMut;
 #[cfg(feature = "unstable-split")]
 use std::future::Future;
-
-use tokio::io::AsyncReadExt;
-use tokio::io::AsyncWriteExt;
 
 pub use crate::close::CloseCode;
 pub use crate::error::WebSocketError;
@@ -228,8 +227,8 @@ pub fn after_handshake_split<R, W>(
   role: Role,
 ) -> (WebSocketRead<R>, WebSocketWrite<W>)
 where
-  R: AsyncWriteExt + Unpin,
-  W: AsyncWriteExt + Unpin,
+  R: rt::Read + Unpin,
+  W: rt::Write + Unpin,
 {
   (
     WebSocketRead {
@@ -289,7 +288,7 @@ impl<'f, S> WebSocketRead<S> {
     send_fn: &mut impl FnMut(Frame<'f>) -> R,
   ) -> Result<Frame, WebSocketError>
   where
-    S: AsyncReadExt + Unpin,
+    S: rt::Read + Unpin,
     E: Into<Box<dyn std::error::Error + Send + Sync + 'static>>,
     R: Future<Output = Result<(), E>>,
   {
@@ -336,7 +335,7 @@ impl<'f, S> WebSocketWrite<S> {
     frame: Frame<'f>,
   ) -> Result<(), WebSocketError>
   where
-    S: AsyncWriteExt + Unpin,
+    S: rt::Write + Unpin,
   {
     self.write_half.write_frame(&mut self.stream, frame).await
   }
@@ -371,7 +370,7 @@ impl<'f, S> WebSocket<S> {
   /// ```
   pub fn after_handshake(stream: S, role: Role) -> Self
   where
-    S: AsyncReadExt + AsyncWriteExt + Unpin,
+    S: rt::Read + rt::Write + Unpin,
   {
     Self {
       stream,
@@ -389,9 +388,9 @@ impl<'f, S> WebSocket<S> {
     split_fn: impl Fn(S) -> (R, W),
   ) -> (WebSocketRead<R>, WebSocketWrite<W>)
   where
-    S: AsyncReadExt + AsyncWriteExt + Unpin,
-    R: AsyncReadExt + Unpin,
-    W: AsyncWriteExt + Unpin,
+    S: rt::Read + rt::Write + Unpin,
+    R: rt::Read + Unpin,
+    W: rt::Write + Unpin,
   {
     let (stream, read, write) = self.into_parts_internal();
     let (r, w) = split_fn(stream);
@@ -487,7 +486,7 @@ impl<'f, S> WebSocket<S> {
     frame: Frame<'f>,
   ) -> Result<(), WebSocketError>
   where
-    S: AsyncReadExt + AsyncWriteExt + Unpin,
+    S: rt::Read + rt::Write + Unpin,
   {
     self.write_half.write_frame(&mut self.stream, frame).await?;
     Ok(())
@@ -521,7 +520,7 @@ impl<'f, S> WebSocket<S> {
   /// ```
   pub async fn read_frame(&mut self) -> Result<Frame<'f>, WebSocketError>
   where
-    S: AsyncReadExt + AsyncWriteExt + Unpin,
+    S: rt::Read + rt::Write + Unpin,
   {
     loop {
       let (res, obligated_send) =
@@ -570,7 +569,7 @@ impl ReadHalf {
     stream: &mut S,
   ) -> (Result<Option<Frame<'f>>, WebSocketError>, Option<Frame<'f>>)
   where
-    S: AsyncReadExt + Unpin,
+    S: rt::Read + Unpin,
   {
     let mut frame = match self.parse_frame_header(stream).await {
       Ok(frame) => frame,
@@ -632,7 +631,7 @@ impl ReadHalf {
     stream: &mut S,
   ) -> Result<Frame<'a>, WebSocketError>
   where
-    S: AsyncReadExt + Unpin,
+    S: rt::Read + Unpin,
   {
     macro_rules! eof {
       ($n:expr) => {{
@@ -739,7 +738,7 @@ impl WriteHalf {
     mut frame: Frame<'a>,
   ) -> Result<(), WebSocketError>
   where
-    S: AsyncWriteExt + Unpin,
+    S: rt::Write + Unpin,
   {
     if self.role == Role::Client && self.auto_apply_mask {
       frame.mask();
@@ -765,6 +764,10 @@ impl WriteHalf {
 #[cfg(test)]
 mod tests {
   use super::*;
+  #[cfg(feature = "futures")]
+  use async_std::net::TcpStream;
+  #[cfg(not(feature = "futures"))]
+  use tokio::net::TcpStream;
 
   const _: () = {
     const fn assert_unsync<S>() {
@@ -788,6 +791,6 @@ mod tests {
       // `$x` implements `AmbiguousIfImpl<Invalid>`.
       let _ = <S as AmbiguousIfImpl<_>>::some_item;
     }
-    assert_unsync::<WebSocket<tokio::net::TcpStream>>();
+    assert_unsync::<WebSocket<TcpStream>>();
   };
 }

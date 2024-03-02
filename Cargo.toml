@@ -46,10 +46,15 @@ axum-core = { version = "0.4.3", optional = true }
 http = { version = "1", optional = true }
 async-trait = { version = "0.1", optional = true }
 
+
+# Futrues integration
+futures-lite = {version = "2.2.0", optional = true}
+
 [features]
-default = ["simd"]
+default = ["simd", "upgrade", "unstable-split"]
 simd = ["simdutf8/aarch64_neon"]
 upgrade = ["hyper", "pin-project", "base64", "sha1", "hyper-util", "http-body-util"]
+futures = ["futures-lite"]
 unstable-split = []
 # Axum integration
 with_axum = ["axum-core", "http", "async-trait"]
@@ -65,9 +70,13 @@ assert2 = "0.3.4"
 trybuild = "1.0.80"
 criterion = "0.4.0"
 anyhow = "1.0.71"
-webpki-roots = "0.23.0"
+webpki-roots = "0.25.2"
 bytes = "1.4.0"
 axum = "0.7.4"
+async-std = {version ="1.12.0", features=["attributes", "unstable"]}
+futures-rustls = "0.24.0"
+futures-lite = "2.2.0"
+
 
 [[bench]]
 name = "unmask"

@@ -17,14 +17,13 @@ use std::future::Future;
 
 use crate::error::WebSocketError;
 use crate::frame::Frame;
+use crate::rt;
 use crate::OpCode;
 use crate::ReadHalf;
 use crate::WebSocket;
 #[cfg(feature = "unstable-split")]
 use crate::WebSocketRead;
 use crate::WriteHalf;
-use tokio::io::AsyncReadExt;
-use tokio::io::AsyncWriteExt;
 
 pub enum Fragment {
   Text(Option<utf8::Incomplete>, Vec<u8>),
@@ -85,7 +84,7 @@ impl<'f, S> FragmentCollector<S> {
   /// Creates a new `FragmentCollector` with the provided `WebSocket`.
   pub fn new(ws: WebSocket<S>) -> FragmentCollector<S>
   where
-    S: AsyncReadExt + AsyncWriteExt + Unpin,
+    S: rt::Read + rt::Write + Unpin,
   {
     let (stream, read_half, write_half) = ws.into_parts_internal();
     FragmentCollector {
@@ -101,7 +100,7 @@ impl<'f, S> FragmentCollector<S> {
   /// Text frames payload is guaranteed to be valid UTF-8.
   pub async fn read_frame(&mut self) -> Result<Frame<'f>, WebSocketError>
   where
-    S: AsyncReadExt + AsyncWriteExt + Unpin,
+    S: rt::Read + rt::Write + Unpin,
   {
     loop {
       let (res, obligated_send) =
@@ -130,7 +129,7 @@ impl<'f, S> FragmentCollector<S> {
     frame: Frame<'f>,
   ) -> Result<(), WebSocketError>
   where
-    S: AsyncReadExt + AsyncWriteExt + Unpin,
+    S: rt::Read + rt::Write + Unpin,
   {
     self.write_half.write_frame(&mut self.stream, frame).await?;
     Ok(())
@@ -149,7 +148,7 @@ impl<'f, S> FragmentCollectorRead<S> {
   /// Creates a new `FragmentCollector` with the provided `WebSocket`.
   pub fn new(ws: WebSocketRead<S>) -> FragmentCollectorRead<S>
   where
-    S: AsyncReadExt + Unpin,
+    S: rt::Read + Unpin,
   {
     let (stream, read_half) = ws.into_parts_internal();
     FragmentCollectorRead {
@@ -167,7 +166,7 @@ impl<'f, S> FragmentCollectorRead<S> {
     send_fn: &mut impl FnMut(Frame<'f>) -> R,
   ) -> Result<Frame<'f>, WebSocketError>
   where
-    S: AsyncReadExt + Unpin,
+    S: rt::Read + Unpin,
     E: Into<Box<dyn std::error::Error + Send + Sync + 'static>>,
     R: Future<Output = Result<(), E>>,
   {

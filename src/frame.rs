@@ -12,12 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use tokio::io::AsyncWriteExt;
-
 use bytes::BytesMut;
 use core::ops::Deref;
 
-use crate::WebSocketError;
+use crate::{rt, WebSocketError};
 
 macro_rules! repr_u8 {
     ($(#[$meta:meta])* $vis:vis enum $name:ident {
@@ -290,7 +288,7 @@ impl<'f> Frame<'f> {
     stream: &mut S,
   ) -> Result<(), std::io::Error>
   where
-    S: AsyncWriteExt + Unpin,
+    S: rt::Write + Unpin,
   {
     use std::io::IoSlice;
 

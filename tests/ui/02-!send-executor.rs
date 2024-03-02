@@ -1,14 +1,21 @@
+use anyhow::Result;
 use fastwebsockets::WebSocket;
+use http_body_util::Empty;
+use hyper::body::Bytes;
 use hyper::header::CONNECTION;
 use hyper::header::UPGRADE;
 use hyper::upgrade::Upgraded;
-use hyper::body::Bytes;
-use http_body_util::Empty;
 use hyper::Request;
 use std::future::Future;
-use tokio::net::TcpStream;
-use hyper_util::rt::tokio::TokioIo;
-use anyhow::Result;
+
+#[cfg(feature = "futures")]
+use async_std::{net::TcpStream, task::spawn_local};
+#[cfg(feature = "futures")]
+use fastwebsockets::FuturesIo as IoWrapper;
+#[cfg(not(feature = "futures"))]
+use hyper_util::rt::tokio::TokioIo as IoWrapper;
+#[cfg(not(feature = "futures"))]
+use tokio::{net::TcpStream, task::spawn_local};
 
 struct SpawnLocalExecutor;
 
@@ -22,9 +29,7 @@ where
   }
 }
 
-async fn connect(
-  path: &str,
-) -> Result<WebSocket<TokioIo<Upgraded>>> {
+async fn connect(path: &str) -> Result<WebSocket<IoWrapper<Upgraded>>> {
   let stream = TcpStream::connect("localhost:9001").await?;
 
   let req = Request::builder()

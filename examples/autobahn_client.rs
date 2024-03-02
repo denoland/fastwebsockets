@@ -24,8 +24,16 @@ use hyper::header::CONNECTION;
 use hyper::header::UPGRADE;
 use hyper::upgrade::Upgraded;
 use hyper::Request;
-use hyper_util::rt::TokioIo;
+
+#[cfg(not(feature = "futures"))]
+use hyper_util::rt::TokioIo as IoWrapper;
+#[cfg(not(feature = "futures"))]
 use tokio::net::TcpStream;
+
+#[cfg(feature = "futures")]
+use async_std::net::TcpStream;
+#[cfg(feature = "futures")]
+use fastwebsockets::FuturesIo as IoWrapper;
 
 struct SpawnExecutor;
 
@@ -39,7 +47,7 @@ where
   }
 }
 
-async fn connect(path: &str) -> Result<FragmentCollector<TokioIo<Upgraded>>> {
+async fn connect(path: &str) -> Result<FragmentCollector<IoWrapper<Upgraded>>> {
   let stream = TcpStream::connect("localhost:9001").await?;
 
   let req = Request::builder()
@@ -67,7 +75,19 @@ async fn get_case_count() -> Result<u32> {
   Ok(std::str::from_utf8(&msg.payload)?.parse()?)
 }
 
-#[tokio::main(flavor = "current_thread")]
+macro_rules! runtime_main {
+    ($($body:tt)*) => {
+        #[cfg(feature = "futures")]
+        #[async_std::main]
+        $($body)*
+
+        #[cfg(not(feature = "futures"))]
+        #[tokio::main]
+        $($body)*
+    };
+}
+
+runtime_main! {
 async fn main() -> Result<()> {
   let count = get_case_count().await?;
 
@@ -102,4 +122,5 @@ async fn main() -> Result<()> {
   ws.write_frame(Frame::close(1000, &[])).await?;
 
   Ok(())
+}
 }
