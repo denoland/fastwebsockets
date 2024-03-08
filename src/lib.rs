@@ -758,6 +758,10 @@ impl WriteHalf {
       stream.write_all(text).await?;
     }
 
+    if frame.opcode == OpCode::Close {
+      stream.shutdown().await?;
+    }
+
     Ok(())
   }
 }
