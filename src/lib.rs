@@ -170,7 +170,9 @@ use bytes::BytesMut;
 #[cfg(feature = "unstable-split")]
 use std::future::Future;
 
+use tokio::io::AsyncRead;
 use tokio::io::AsyncReadExt;
+use tokio::io::AsyncWrite;
 use tokio::io::AsyncWriteExt;
 
 pub use crate::close::CloseCode;
@@ -228,8 +230,8 @@ pub fn after_handshake_split<R, W>(
   role: Role,
 ) -> (WebSocketRead<R>, WebSocketWrite<W>)
 where
-  R: AsyncWriteExt + Unpin,
-  W: AsyncWriteExt + Unpin,
+  R: AsyncWrite + Unpin,
+  W: AsyncWrite + Unpin,
 {
   (
     WebSocketRead {
@@ -289,7 +291,7 @@ impl<'f, S> WebSocketRead<S> {
     send_fn: &mut impl FnMut(Frame<'f>) -> R,
   ) -> Result<Frame, WebSocketError>
   where
-    S: AsyncReadExt + Unpin,
+    S: AsyncRead + Unpin,
     E: Into<Box<dyn std::error::Error + Send + Sync + 'static>>,
     R: Future<Output = Result<(), E>>,
   {
@@ -336,7 +338,7 @@ impl<'f, S> WebSocketWrite<S> {
     frame: Frame<'f>,
   ) -> Result<(), WebSocketError>
   where
-    S: AsyncWriteExt + Unpin,
+    S: AsyncWrite + Unpin,
   {
     self.write_half.write_frame(&mut self.stream, frame).await
   }
@@ -371,7 +373,7 @@ impl<'f, S> WebSocket<S> {
   /// ```
   pub fn after_handshake(stream: S, role: Role) -> Self
   where
-    S: AsyncReadExt + AsyncWriteExt + Unpin,
+    S: AsyncRead + AsyncWrite + Unpin,
   {
     Self {
       stream,
@@ -389,9 +391,9 @@ impl<'f, S> WebSocket<S> {
     split_fn: impl Fn(S) -> (R, W),
   ) -> (WebSocketRead<R>, WebSocketWrite<W>)
   where
-    S: AsyncReadExt + AsyncWriteExt + Unpin,
-    R: AsyncReadExt + Unpin,
-    W: AsyncWriteExt + Unpin,
+    S: AsyncRead + AsyncWrite + Unpin,
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin,
   {
     let (stream, read, write) = self.into_parts_internal();
     let (r, w) = split_fn(stream);
@@ -487,7 +489,7 @@ impl<'f, S> WebSocket<S> {
     frame: Frame<'f>,
   ) -> Result<(), WebSocketError>
   where
-    S: AsyncReadExt + AsyncWriteExt + Unpin,
+    S: AsyncRead + AsyncWrite + Unpin,
   {
     self.write_half.write_frame(&mut self.stream, frame).await?;
     Ok(())
@@ -521,7 +523,7 @@ impl<'f, S> WebSocket<S> {
   /// ```
   pub async fn read_frame(&mut self) -> Result<Frame<'f>, WebSocketError>
   where
-    S: AsyncReadExt + AsyncWriteExt + Unpin,
+    S: AsyncRead + AsyncWrite + Unpin,
   {
     loop {
       let (res, obligated_send) =
@@ -546,7 +548,7 @@ const MAX_HEADER_SIZE: usize = 14;
 
 impl ReadHalf {
   pub fn after_handshake(role: Role) -> Self {
-    let mut buffer = BytesMut::with_capacity(8192);
+    let buffer = BytesMut::with_capacity(8192);
 
     Self {
       role,
@@ -570,7 +572,7 @@ impl ReadHalf {
     stream: &mut S,
   ) -> (Result<Option<Frame<'f>>, WebSocketError>, Option<Frame<'f>>)
   where
-    S: AsyncReadExt + Unpin,
+    S: AsyncRead + Unpin,
   {
     let mut frame = match self.parse_frame_header(stream).await {
       Ok(frame) => frame,
@@ -632,7 +634,7 @@ impl ReadHalf {
     stream: &mut S,
   ) -> Result<Frame<'a>, WebSocketError>
   where
-    S: AsyncReadExt + Unpin,
+    S: AsyncRead + Unpin,
   {
     macro_rules! eof {
       ($n:expr) => {{
@@ -739,7 +741,7 @@ impl WriteHalf {
     mut frame: Frame<'a>,
   ) -> Result<(), WebSocketError>
   where
-    S: AsyncWriteExt + Unpin,
+    S: AsyncWrite + Unpin,
   {
     if self.role == Role::Client && self.auto_apply_mask {
       frame.mask();
