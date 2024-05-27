@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#[cfg(feature = "unstable-split")]
 use std::future::Future;
 
 use crate::error::WebSocketError;
@@ -20,7 +19,6 @@ use crate::frame::Frame;
 use crate::OpCode;
 use crate::ReadHalf;
 use crate::WebSocket;
-#[cfg(feature = "unstable-split")]
 use crate::WebSocketRead;
 use crate::WriteHalf;
 use tokio::io::AsyncRead;
@@ -137,14 +135,12 @@ impl<'f, S> FragmentCollector<S> {
   }
 }
 
-#[cfg(feature = "unstable-split")]
 pub struct FragmentCollectorRead<S> {
   stream: S,
   read_half: ReadHalf,
   fragments: Fragments,
 }
 
-#[cfg(feature = "unstable-split")]
 impl<'f, S> FragmentCollectorRead<S> {
   /// Creates a new `FragmentCollector` with the provided `WebSocket`.
   pub fn new(ws: WebSocketRead<S>) -> FragmentCollectorRead<S>

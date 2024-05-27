@@ -167,18 +167,19 @@ pub mod upgrade;
 use bytes::Buf;
 
 use bytes::BytesMut;
-#[cfg(feature = "unstable-split")]
+use std::future::poll_fn;
 use std::future::Future;
+use std::pin::pin;
+use std::task::ready;
+use std::task::Context;
+use std::task::Poll;
 
 use tokio::io::AsyncRead;
-use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWrite;
-use tokio::io::AsyncWriteExt;
 
 pub use crate::close::CloseCode;
 pub use crate::error::WebSocketError;
 pub use crate::fragment::FragmentCollector;
-#[cfg(feature = "unstable-split")]
 pub use crate::fragment::FragmentCollectorRead;
 pub use crate::frame::Frame;
 pub use crate::frame::OpCode;
@@ -197,7 +198,7 @@ pub(crate) struct WriteHalf {
   vectored: bool,
   auto_apply_mask: bool,
   writev_threshold: usize,
-  write_buffer: Vec<u8>,
+  buffer: BytesMut,
 }
 
 pub(crate) struct ReadHalf {
@@ -210,19 +211,16 @@ pub(crate) struct ReadHalf {
   buffer: BytesMut,
 }
 
-#[cfg(feature = "unstable-split")]
 pub struct WebSocketRead<S> {
   stream: S,
   read_half: ReadHalf,
 }
 
-#[cfg(feature = "unstable-split")]
 pub struct WebSocketWrite<S> {
   stream: S,
   write_half: WriteHalf,
 }
 
-#[cfg(feature = "unstable-split")]
 /// Create a split `WebSocketRead`/`WebSocketWrite` pair from a stream that has already completed the WebSocket handshake.
 pub fn after_handshake_split<R, W>(
   read: R,
@@ -245,7 +243,6 @@ where
   )
 }
 
-#[cfg(feature = "unstable-split")]
 impl<'f, S> WebSocketRead<S> {
   /// Consumes the `WebSocketRead` and returns the underlying stream.
   #[inline]
@@ -309,7 +306,6 @@ impl<'f, S> WebSocketRead<S> {
   }
 }
 
-#[cfg(feature = "unstable-split")]
 impl<'f, S> WebSocketWrite<S> {
   /// Sets whether to use vectored writes. This option does not guarantee that vectored writes will be always used.
   ///
@@ -385,7 +381,6 @@ impl<'f, S> WebSocket<S> {
   /// Split a [`WebSocket`] into a [`WebSocketRead`] and [`WebSocketWrite`] half. Note that the split version does not
   /// handle fragmented packets and you may wish to create a [`FragmentCollectorRead`] over top of the read half that
   /// is returned.
-  #[cfg(feature = "unstable-split")]
   pub fn split<R, W>(
     self,
     split_fn: impl Fn(S) -> (R, W),
@@ -525,26 +520,38 @@ impl<'f, S> WebSocket<S> {
   where
     S: AsyncRead + AsyncWrite + Unpin,
   {
+    poll_fn(|cx| self.poll_read_frame(cx)).await
+  }
+
+  pub fn poll_read_frame(
+    &mut self,
+    cx: &mut Context<'_>,
+  ) -> Poll<Result<Frame<'f>, WebSocketError>>
+  where
+    S: AsyncRead + AsyncWrite + Unpin,
+  {
     loop {
       let (res, obligated_send) =
-        self.read_half.read_frame_inner(&mut self.stream).await;
+        ready!(self.read_half.poll_read_frame_inner(&mut self.stream, cx));
+
       let is_closed = self.write_half.closed;
       if let Some(frame) = obligated_send {
         if !is_closed {
-          self.write_half.write_frame(&mut self.stream, frame).await?;
+          self.write_half.start_send_frame(frame)?;
+          ready!(self.write_half.poll_flush(&mut self.stream, cx))?;
         }
       }
+
       if let Some(frame) = res? {
         if is_closed && frame.opcode != OpCode::Close {
-          return Err(WebSocketError::ConnectionClosed);
+          return Poll::Ready(Err(WebSocketError::ConnectionClosed));
         }
-        break Ok(frame);
+
+        break Poll::Ready(Ok(frame));
       }
     }
   }
 }
-
-const MAX_HEADER_SIZE: usize = 14;
 
 impl ReadHalf {
   pub fn after_handshake(role: Role) -> Self {
@@ -574,9 +581,20 @@ impl ReadHalf {
   where
     S: AsyncRead + Unpin,
   {
-    let mut frame = match self.parse_frame_header(stream).await {
+    poll_fn(|cx| self.poll_read_frame_inner(stream, cx)).await
+  }
+
+  pub(crate) fn poll_read_frame_inner<'f, S>(
+    &mut self,
+    stream: &mut S,
+    cx: &mut Context<'_>,
+  ) -> Poll<(Result<Option<Frame<'f>>, WebSocketError>, Option<Frame<'f>>)>
+  where
+    S: AsyncRead + Unpin,
+  {
+    let mut frame = match ready!(self.poll_parse_frame_header(stream, cx)) {
       Ok(frame) => frame,
-      Err(e) => return (Err(e), None),
+      Err(e) => return Poll::Ready((Err(e), None)),
     };
 
     if self.role == Role::Server && self.auto_apply_mask {
@@ -587,7 +605,9 @@ impl ReadHalf {
       OpCode::Close if self.auto_close => {
         match frame.payload.len() {
           0 => {}
-          1 => return (Err(WebSocketError::InvalidCloseFrame), None),
+          1 => {
+            return Poll::Ready((Err(WebSocketError::InvalidCloseFrame), None))
+          }
           _ => {
             let code = close::CloseCode::from(u16::from_be_bytes(
               frame.payload[0..2].try_into().unwrap(),
@@ -595,7 +615,7 @@ impl ReadHalf {
 
             #[cfg(feature = "simd")]
             if simdutf8::basic::from_utf8(&frame.payload[2..]).is_err() {
-              return (Err(WebSocketError::InvalidUTF8), None);
+              return Poll::Ready((Err(WebSocketError::InvalidUTF8), None));
             };
 
             #[cfg(not(feature = "simd"))]
@@ -604,49 +624,55 @@ impl ReadHalf {
             };
 
             if !code.is_allowed() {
-              return (
+              return Poll::Ready((
                 Err(WebSocketError::InvalidCloseCode),
                 Some(Frame::close(1002, &frame.payload[2..])),
-              );
+              ));
             }
           }
         };
 
         let obligated_send = Frame::close_raw(frame.payload.to_owned().into());
-        (Ok(Some(frame)), Some(obligated_send))
+        Poll::Ready((Ok(Some(frame)), Some(obligated_send)))
       }
       OpCode::Ping if self.auto_pong => {
-        (Ok(None), Some(Frame::pong(frame.payload)))
+        Poll::Ready((Ok(None), Some(Frame::pong(frame.payload))))
       }
       OpCode::Text => {
         if frame.fin && !frame.is_utf8() {
-          (Err(WebSocketError::InvalidUTF8), None)
+          Poll::Ready((Err(WebSocketError::InvalidUTF8), None))
         } else {
-          (Ok(Some(frame)), None)
+          Poll::Ready((Ok(Some(frame)), None))
         }
       }
-      _ => (Ok(Some(frame)), None),
+      _ => Poll::Ready((Ok(Some(frame)), None)),
     }
   }
 
-  async fn parse_frame_header<'a, S>(
+  fn poll_parse_frame_header<'a, S>(
     &mut self,
     stream: &mut S,
-  ) -> Result<Frame<'a>, WebSocketError>
+    cx: &mut Context<'_>,
+  ) -> Poll<Result<Frame<'a>, WebSocketError>>
   where
     S: AsyncRead + Unpin,
   {
-    macro_rules! eof {
-      ($n:expr) => {{
-        if $n == 0 {
-          return Err(WebSocketError::UnexpectedEOF);
+    macro_rules! read_next {
+      () => {{
+        let bytes_read = ready!(tokio_util::io::poll_read_buf(
+          pin!(&mut *stream),
+          cx,
+          &mut self.buffer
+        ))?;
+        if bytes_read == 0 {
+          return Poll::Ready(Err(WebSocketError::UnexpectedEOF));
         }
       }};
     }
 
     // Read the first two bytes
     while self.buffer.remaining() < 2 {
-      eof!(stream.read_buf(&mut self.buffer).await?);
+      read_next!();
     }
 
     let fin = self.buffer[0] & 0b10000000 != 0;
@@ -655,7 +681,7 @@ impl ReadHalf {
     let rsv3 = self.buffer[0] & 0b00010000 != 0;
 
     if rsv1 || rsv2 || rsv3 {
-      return Err(WebSocketError::ReservedBitsNotZero);
+      return Poll::Ready(Err(WebSocketError::ReservedBitsNotZero));
     }
 
     let opcode = frame::OpCode::try_from(self.buffer[0] & 0b00001111)?;
@@ -668,23 +694,26 @@ impl ReadHalf {
       _ => 0,
     };
 
-    self.buffer.advance(2);
-    while self.buffer.remaining() < extra + masked as usize * 4 {
-      eof!(stream.read_buf(&mut self.buffer).await?);
+    // total header size
+    let header_size = 2 + extra + masked as usize * 4;
+    while self.buffer.remaining() < header_size {
+      read_next!();
     }
+
+    let mut header = &self.buffer[2..header_size];
 
     let payload_len: usize = match extra {
       0 => usize::from(length_code),
-      2 => self.buffer.get_u16() as usize,
+      2 => header.get_u16() as usize,
       #[cfg(any(target_pointer_width = "64", target_pointer_width = "128"))]
-      8 => self.buffer.get_u64() as usize,
+      8 => header.get_u64() as usize,
       // On 32bit systems, usize is only 4bytes wide so we must check for usize overflowing
       #[cfg(any(
         target_pointer_width = "8",
         target_pointer_width = "16",
         target_pointer_width = "32"
       ))]
-      8 => match usize::try_from(self.buffer.get_u64()) {
+      8 => match usize::try_from(header.get_u64()) {
         Ok(length) => length,
         Err(_) => return Err(WebSocketError::FrameTooLarge),
       },
@@ -692,33 +721,33 @@ impl ReadHalf {
     };
 
     let mask = if masked {
-      Some(self.buffer.get_u32().to_be_bytes())
+      Some(header.get_u32().to_be_bytes())
     } else {
       None
     };
 
     if frame::is_control(opcode) && !fin {
-      return Err(WebSocketError::ControlFrameFragmented);
+      return Poll::Ready(Err(WebSocketError::ControlFrameFragmented));
     }
 
     if opcode == OpCode::Ping && payload_len > 125 {
-      return Err(WebSocketError::PingFrameTooLarge);
+      return Poll::Ready(Err(WebSocketError::PingFrameTooLarge));
     }
 
     if payload_len >= self.max_message_size {
-      return Err(WebSocketError::FrameTooLarge);
+      return Poll::Ready(Err(WebSocketError::FrameTooLarge));
     }
 
     // Reserve a bit more to try to get next frame header and avoid a syscall to read it next time
-    self.buffer.reserve(payload_len + MAX_HEADER_SIZE);
-    while payload_len > self.buffer.remaining() {
-      eof!(stream.read_buf(&mut self.buffer).await?);
+    while header_size + payload_len > self.buffer.remaining() {
+      read_next!();
     }
 
     // if we read too much it will stay in the buffer, for the next call to this method
-    let payload = self.buffer.split_to(payload_len);
+    let mut message = self.buffer.split_to(payload_len + header_size);
+    let payload = message.split_off(header_size);
     let frame = Frame::new(fin, opcode, mask, Payload::Bytes(payload));
-    Ok(frame)
+    Poll::Ready(Ok(frame))
   }
 }
 
@@ -730,7 +759,7 @@ impl WriteHalf {
       auto_apply_mask: true,
       vectored: true,
       writev_threshold: 1024,
-      write_buffer: Vec::with_capacity(2),
+      buffer: BytesMut::with_capacity(1024),
     }
   }
 
@@ -738,11 +767,22 @@ impl WriteHalf {
   pub async fn write_frame<'a, S>(
     &'a mut self,
     stream: &mut S,
-    mut frame: Frame<'a>,
+    frame: Frame<'a>,
   ) -> Result<(), WebSocketError>
   where
     S: AsyncWrite + Unpin,
   {
+    self.start_send_frame(frame)?;
+    poll_fn(|cx| self.poll_flush(stream, cx)).await
+  }
+
+  /// Writes a frame to the provided stream.
+  pub fn start_send_frame<'a>(
+    &'a mut self,
+    mut frame: Frame<'a>,
+  ) -> Result<(), WebSocketError> {
+    // TODO: backpressure check?
+
     if self.role == Role::Client && self.auto_apply_mask {
       frame.mask();
     }
@@ -753,14 +793,39 @@ impl WriteHalf {
       return Err(WebSocketError::ConnectionClosed);
     }
 
-    if self.vectored && frame.payload.len() > self.writev_threshold {
-      frame.writev(stream).await?;
-    } else {
-      let text = frame.write(&mut self.write_buffer);
-      stream.write_all(text).await?;
-    }
+    frame.fmt_head(&mut self.buffer);
+    self.buffer.extend_from_slice(&frame.payload);
 
     Ok(())
+  }
+
+  pub fn poll_flush<'a, S>(
+    &'a mut self,
+    stream: &mut S,
+    cx: &mut Context<'_>,
+  ) -> Poll<Result<(), WebSocketError>>
+  where
+    S: AsyncWrite + Unpin,
+  {
+    loop {
+      // try to flush before writing
+      if let Err(err) =
+        ready!(pin!(&mut *stream).poll_flush(cx)).map_err(Into::into)
+      {
+        break Poll::Ready(Err(err));
+      }
+
+      if self.buffer.is_empty() {
+        break Poll::Ready(Ok(()));
+      }
+
+      let written = ready!(pin!(&mut *stream).poll_write(cx, &self.buffer))?;
+      if written == 0 {
+        break Poll::Ready(Err(WebSocketError::ConnectionClosed));
+      }
+
+      self.buffer.advance(written);
+    }
   }
 }
 
