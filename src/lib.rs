@@ -167,9 +167,11 @@ pub mod upgrade;
 use bytes::Buf;
 
 use bytes::BytesMut;
+use futures::task::AtomicWaker;
 use std::future::poll_fn;
 use std::future::Future;
 use std::pin::pin;
+use std::sync::Arc;
 use std::task::ready;
 use std::task::Context;
 use std::task::Poll;
@@ -185,6 +187,53 @@ pub use crate::frame::Frame;
 pub use crate::frame::OpCode;
 pub use crate::frame::Payload;
 pub use crate::mask::unmask;
+
+enum ContextKind {
+  /// Read is used when the cx is called from WebSocketRead.
+  Read,
+  /// Write is used when the cx is called from WebSocketWrite.
+  Write,
+}
+
+// WakerDemux keeps 2 wakers, one for WebSocketRead and another for WebSocketWrite.
+//
+// Waking up the WakerDemux will wake both wakers.
+#[derive(Default)]
+struct WakerDemux {
+  read_waker: AtomicWaker,
+  write_waker: AtomicWaker,
+}
+
+impl futures::task::ArcWake for WakerDemux {
+  fn wake_by_ref(this: &Arc<Self>) {
+    this.read_waker.wake();
+    this.write_waker.wake();
+  }
+}
+
+impl WakerDemux {
+  /// Set the Waker to the corresponding slot.
+  #[inline]
+  fn set_waker(&self, kind: ContextKind, waker: &futures::task::Waker) {
+    match kind {
+      ContextKind::Read => {
+        self.read_waker.register(waker);
+      }
+      ContextKind::Write => {
+        self.write_waker.register(waker);
+      }
+    }
+  }
+
+  fn with_context<F, R>(self: &Arc<Self>, f: F) -> R
+  where
+    F: FnOnce(&mut Context<'_>) -> R,
+  {
+    let waker = futures::task::waker_ref(&self);
+    let mut cx = Context::from_waker(&waker);
+    f(&mut cx)
+  }
+}
 
 #[derive(Copy, Clone, PartialEq)]
 pub enum Role {
@@ -345,6 +394,7 @@ pub struct WebSocket<S> {
   stream: S,
   write_half: WriteHalf,
   read_half: ReadHalf,
+  waker: Arc<WakerDemux>,
 }
 
 impl<'f, S> WebSocket<S> {
@@ -371,8 +421,10 @@ impl<'f, S> WebSocket<S> {
   where
     S: AsyncRead + AsyncWrite + Unpin,
   {
+    let waker = Arc::new(WakerDemux::default());
     Self {
       stream,
+      waker,
       write_half: WriteHalf::after_handshake(role),
       read_half: ReadHalf::after_handshake(role),
     }
@@ -490,6 +542,31 @@ impl<'f, S> WebSocket<S> {
     Ok(())
   }
 
+  pub fn poll_write_frame(
+    &mut self,
+    cx: &mut Context<'_>,
+    frame: Frame<'f>,
+  ) -> Poll<Result<(), WebSocketError>>
+  where
+    S: AsyncWrite + Unpin,
+  {
+    self.write_half.start_send_frame(frame)?;
+    self.poll_flush(cx)
+  }
+
+  pub fn poll_flush(
+    &mut self,
+    cx: &mut Context<'_>,
+  ) -> Poll<Result<(), WebSocketError>>
+  where
+    S: AsyncWrite + Unpin,
+  {
+    self.waker.set_waker(ContextKind::Write, cx.waker());
+    self
+      .waker
+      .with_context(|cx| self.write_half.poll_flush(&mut self.stream, cx))
+  }
+
   /// Reads a frame from the stream.
   ///
   /// This method will unmask the frame payload. For fragmented frames, use `FragmentCollector::read_frame`.
@@ -523,6 +600,7 @@ impl<'f, S> WebSocket<S> {
     poll_fn(|cx| self.poll_read_frame(cx)).await
   }
 
+  /// Polls the next frame from the Stream.
   pub fn poll_read_frame(
     &mut self,
     cx: &mut Context<'_>,
@@ -538,7 +616,10 @@ impl<'f, S> WebSocket<S> {
       if let Some(frame) = obligated_send {
         if !is_closed {
           self.write_half.start_send_frame(frame)?;
-          ready!(self.write_half.poll_flush(&mut self.stream, cx))?;
+          let res = self.waker.with_context(|cx| {
+            self.write_half.poll_flush(&mut self.stream, cx)
+          });
+          ready!(res)?;
         }
       }
 
@@ -584,6 +665,7 @@ impl ReadHalf {
     poll_fn(|cx| self.poll_read_frame_inner(stream, cx)).await
   }
 
+  /// Reads a frame from the Stream.
   pub(crate) fn poll_read_frame_inner<'f, S>(
     &mut self,
     stream: &mut S,
@@ -649,6 +731,7 @@ impl ReadHalf {
     }
   }
 
+  /// Reads a frame from the Stream parsing the headers.
   fn poll_parse_frame_header<'a, S>(
     &mut self,
     stream: &mut S,
@@ -745,6 +828,7 @@ impl ReadHalf {
 
     // if we read too much it will stay in the buffer, for the next call to this method
     let mut message = self.buffer.split_to(payload_len + header_size);
+    // split the message off of header_size to get the payload.
     let payload = message.split_off(header_size);
     let frame = Frame::new(fin, opcode, mask, Payload::Bytes(payload));
     Poll::Ready(Ok(frame))
@@ -776,7 +860,9 @@ impl WriteHalf {
     poll_fn(|cx| self.poll_flush(stream, cx)).await
   }
 
-  /// Writes a frame to the provided stream.
+  /// Serializes a frame into the internal buffer.
+  ///
+  /// This method is similar to [Sink::start_send](https://docs.rs/futures/latest/futures/sink/trait.Sink.html#tymethod.start_send).
   pub fn start_send_frame<'a>(
     &'a mut self,
     mut frame: Frame<'a>,
@@ -799,6 +885,9 @@ impl WriteHalf {
     Ok(())
   }
 
+  /// Flushes the internal buffer into the Stream.
+  ///
+  /// Returns Poll::Ready(Ok(())) when no more bytes are left.
   pub fn poll_flush<'a, S>(
     &'a mut self,
     stream: &mut S,
