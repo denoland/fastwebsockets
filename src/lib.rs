@@ -626,6 +626,7 @@ impl<'f, S> WebSocket<S> {
       if let Some(frame) = obligated_send {
         if !is_closed {
           self.write_half.start_send_frame(frame)?;
+          self.waker.set_waker(ContextKind::Read, cx.waker());
           let res = self.waker.with_context(|cx| {
             self.write_half.poll_flush(&mut self.stream, cx)
           });
