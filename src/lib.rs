@@ -353,6 +353,17 @@ impl<'f, S> WebSocketRead<S> {
       }
     }
   }
+
+  /// Reads a frame from the stream.
+  pub fn poll_read_frame<R, E>(
+    &mut self,
+    cx: &mut Context<'_>,
+  ) -> Poll<(Result<Option<Frame>, WebSocketError>, Option<Frame>)>
+  where
+    S: AsyncRead + Unpin,
+  {
+    self.read_half.poll_read_frame_inner(&mut self.stream, cx)
+  }
 }
 
 impl<'f, S> WebSocketWrite<S> {
@@ -386,6 +397,18 @@ impl<'f, S> WebSocketWrite<S> {
     S: AsyncWrite + Unpin,
   {
     self.write_half.write_frame(&mut self.stream, frame).await
+  }
+
+  pub fn poll_write_frame(
+    &mut self,
+    cx: &mut Context<'_>,
+    frame: Frame<'f>,
+  ) -> Poll<Result<(), WebSocketError>>
+  where
+    S: AsyncWrite + Unpin,
+  {
+    self.write_half.start_send_frame(frame)?;
+    self.write_half.poll_flush(&mut self.stream, cx)
   }
 }
 
