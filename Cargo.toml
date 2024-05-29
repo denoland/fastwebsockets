@@ -50,7 +50,7 @@ axum-core = { version = "0.4.3", optional = true }
 http = { version = "1", optional = true }
 async-trait = { version = "0.1", optional = true }
 tokio-util = { version = "0.7.11", features = ["codec", "io"] }
-futures = { version = "0.3.30", default-features = false, features = ["std"] }
+futures = { version = "0.3", default-features = false, features = ["std"] }
 
 [features]
 default = ["simd"]
