@@ -542,6 +542,16 @@ impl<'f, S> WebSocket<S> {
     Ok(())
   }
 
+  pub fn start_send_frame(
+    &mut self,
+    frame: Frame<'f>,
+  ) -> Result<(), WebSocketError>
+  where
+    S: AsyncWrite + Unpin,
+  {
+    self.write_half.start_send_frame(frame)
+  }
+
   pub fn poll_write_frame(
     &mut self,
     cx: &mut Context<'_>,
