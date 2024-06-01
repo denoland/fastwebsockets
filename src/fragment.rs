@@ -135,6 +135,12 @@ impl<'f, S> FragmentCollector<S> {
     self.write_half.write_frame(&mut self.stream, frame).await?;
     Ok(())
   }
+
+  /// Consumes the `FragmentCollector` and returns the underlying stream.
+  #[inline]
+  pub fn into_inner(self) -> S {
+    self.stream
+  }
 }
 
 #[cfg(feature = "unstable-split")]
