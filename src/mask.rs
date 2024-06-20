@@ -14,9 +14,9 @@
 
 #[inline]
 fn unmask_easy(payload: &mut [u8], mask: [u8; 4]) {
-  for i in 0..payload.len() {
-    payload[i] ^= mask[i & 3];
-  }
+  payload.iter_mut().enumerate().for_each(|(i, v)| {
+    *v ^= mask[i & 3];
+  });
 }
 
 // TODO(@littledivy): Compiler does a good job at auto-vectorizing `unmask_fallback` with
