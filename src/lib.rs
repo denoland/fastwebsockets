@@ -169,12 +169,14 @@ use bytes::Buf;
 use bytes::BytesMut;
 use futures::task::AtomicWaker;
 use std::future::poll_fn;
-use std::future::Future;
 use std::pin::pin;
 use std::sync::Arc;
 use std::task::ready;
 use std::task::Context;
 use std::task::Poll;
+
+#[cfg(feature = "unstable-split")]
+use std::future::Future;
 
 use tokio::io::AsyncRead;
 use tokio::io::AsyncWrite;
@@ -182,6 +184,7 @@ use tokio::io::AsyncWrite;
 pub use crate::close::CloseCode;
 pub use crate::error::WebSocketError;
 pub use crate::fragment::FragmentCollector;
+#[cfg(feature = "unstable-split")]
 pub use crate::fragment::FragmentCollectorRead;
 pub use crate::frame::Frame;
 pub use crate::frame::OpCode;
@@ -260,6 +263,7 @@ pub(crate) struct ReadHalf {
   buffer: BytesMut,
 }
 
+#[cfg(feature = "unstable-split")]
 pub struct WebSocketRead<S> {
   stream: S,
   read_half: ReadHalf,
@@ -270,6 +274,7 @@ pub struct WebSocketWrite<S> {
   write_half: WriteHalf,
 }
 
+#[cfg(feature = "unstable-split")]
 /// Create a split `WebSocketRead`/`WebSocketWrite` pair from a stream that has already completed the WebSocket handshake.
 pub fn after_handshake_split<R, W>(
   read: R,
@@ -292,6 +297,7 @@ where
   )
 }
 
+#[cfg(feature = "unstable-split")]
 impl<'f, S> WebSocketRead<S> {
   /// Consumes the `WebSocketRead` and returns the underlying stream.
   #[inline]
@@ -366,6 +372,7 @@ impl<'f, S> WebSocketRead<S> {
   }
 }
 
+#[cfg(feature = "unstable-split")]
 impl<'f, S> WebSocketWrite<S> {
   /// Sets whether to use vectored writes. This option does not guarantee that vectored writes will be always used.
   ///
@@ -453,6 +460,7 @@ impl<'f, S> WebSocket<S> {
     }
   }
 
+  #[cfg(feature = "unstable-split")]
   /// Split a [`WebSocket`] into a [`WebSocketRead`] and [`WebSocketWrite`] half. Note that the split version does not
   /// handle fragmented packets and you may wish to create a [`FragmentCollectorRead`] over top of the read half that
   /// is returned.

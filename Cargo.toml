@@ -63,6 +63,7 @@ upgrade = [
     "hyper-util",
     "http-body-util",
 ]
+unstable-split = []
 # Axum integration
 with_axum = ["axum-core", "http", "async-trait"]
 
