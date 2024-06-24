@@ -198,9 +198,13 @@ enum ContextKind {
   Write,
 }
 
-// WakerDemux keeps 2 wakers, one for WebSocketRead and another for WebSocketWrite.
+// WakerDemux keeps track of whether the waker was called from a reader or a writer.
 //
-// Waking up the WakerDemux will wake both wakers.
+// This is important because the reader can also write, in order to reply to Ping or Close messages.
+// If we didn't implement the WakerDemux the reader could hijack the writer's Waker and the writer's task
+// would never get notified.
+//
+// Waking up the WakerDemux will wake the read and write tasks.
 #[derive(Default)]
 struct WakerDemux {
   read_waker: AtomicWaker,
@@ -228,6 +232,7 @@ impl WakerDemux {
     }
   }
 
+  #[inline]
   fn with_context<F, R>(self: &Arc<Self>, f: F) -> R
   where
     F: FnOnce(&mut Context<'_>) -> R,
@@ -238,6 +243,10 @@ impl WakerDemux {
   }
 }
 
+/// The role the connection is taking.
+///
+/// When a server role is taken the frames will not be masked, unlike
+/// the client role, in which frames are masked.
 #[derive(Copy, Clone, PartialEq)]
 pub enum Role {
   Server,
@@ -264,11 +273,14 @@ pub(crate) struct ReadHalf {
 }
 
 #[cfg(feature = "unstable-split")]
+/// Read end of a WebSocket connection.
 pub struct WebSocketRead<S> {
   stream: S,
   read_half: ReadHalf,
 }
 
+#[cfg(feature = "unstable-split")]
+/// Write end of a WebSocket connection.
 pub struct WebSocketWrite<S> {
   stream: S,
   write_half: WriteHalf,
@@ -392,10 +404,12 @@ impl<'f, S> WebSocketWrite<S> {
     self.write_half.auto_apply_mask = auto_apply_mask;
   }
 
+  /// Returns whether the connection was closed or not.
   pub fn is_closed(&self) -> bool {
     self.write_half.closed
   }
 
+  /// Sends a frame.
   pub async fn write_frame(
     &mut self,
     frame: Frame<'f>,
@@ -406,6 +420,9 @@ impl<'f, S> WebSocketWrite<S> {
     self.write_half.write_frame(&mut self.stream, frame).await
   }
 
+  /// Serializes the frame into the internal buffer and tries to flush the contents.
+  ///
+  /// If the function returns Poll::Pending, the user needs to call poll_flush.
   pub fn poll_write_frame(
     &mut self,
     cx: &mut Context<'_>,
@@ -541,6 +558,7 @@ impl<'f, S> WebSocket<S> {
     self.write_half.auto_apply_mask = auto_apply_mask;
   }
 
+  /// Returns whether the connection is closed or not.
   pub fn is_closed(&self) -> bool {
     self.write_half.closed
   }
@@ -573,6 +591,9 @@ impl<'f, S> WebSocket<S> {
     Ok(())
   }
 
+  /// Serializes a frame into the internal buffer.
+  ///
+  /// This method is similar to [Sink::start_send](https://docs.rs/futures/0.3.30/futures/sink/trait.Sink.html#tymethod.start_send).
   pub fn start_send_frame(
     &mut self,
     frame: Frame<'f>,
@@ -583,6 +604,11 @@ impl<'f, S> WebSocket<S> {
     self.write_half.start_send_frame(frame)
   }
 
+  /// Serializes a frame into the internal buffer.
+  ///
+  /// Beware of the internal buffer. If the other end of the connection is not consuming fast enough it might fill fast.
+  ///
+  /// This method is similar to [Sink::start_send](https://docs.rs/futures/0.3.30/futures/sink/trait.Sink.html#tymethod.start_send).
   pub fn poll_write_frame(
     &mut self,
     cx: &mut Context<'_>,
@@ -595,6 +621,9 @@ impl<'f, S> WebSocket<S> {
     self.poll_flush(cx)
   }
 
+  /// Flushes the internal buffer into the Stream.
+  ///
+  /// Returns Poll::Ready(Ok(())) when no more bytes are left.
   pub fn poll_flush(
     &mut self,
     cx: &mut Context<'_>,
@@ -945,11 +974,6 @@ impl WriteHalf {
     }
   }
 
-  /// Serializes a frame into the internal buffer.
-  ///
-  /// Beware of the internal buffer. If the other end of the connection is not consuming fast enough it might fill fast.
-  ///
-  /// This method is similar to [Sink::start_send](https://docs.rs/futures/latest/futures/sink/trait.Sink.html#tymethod.start_send).
   pub fn start_send_frame<'a>(
     &'a mut self,
     mut frame: Frame<'a>,
@@ -974,9 +998,6 @@ impl WriteHalf {
     Ok(())
   }
 
-  /// Flushes the internal buffer into the Stream.
-  ///
-  /// Returns Poll::Ready(Ok(())) when no more bytes are left.
   pub fn poll_flush<'a, S>(
     &'a mut self,
     stream: &mut S,
