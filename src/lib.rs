@@ -773,7 +773,7 @@ impl ReadHalf {
 
             #[cfg(not(feature = "simd"))]
             if std::str::from_utf8(&frame.payload[2..]).is_err() {
-              return (Err(WebSocketError::InvalidUTF8), None);
+              return Poll::Ready((Err(WebSocketError::InvalidUTF8), None));
             };
 
             if !code.is_allowed() {
