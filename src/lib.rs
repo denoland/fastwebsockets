@@ -898,11 +898,56 @@ impl WriteHalf {
   where
     S: AsyncWrite + Unpin,
   {
-    self.start_send_frame(frame)?;
-    poll_fn(|cx| self.poll_flush(stream, cx)).await
+    // maybe_frame determines the state.
+    // If a frame is present we need to poll_ready, else flush it.
+    let mut maybe_frame = Some(frame);
+    poll_fn(|cx| loop {
+      match maybe_frame.take() {
+        Some(frame) => match self.poll_ready(stream, cx) {
+          Poll::Ready(res) => {
+            res?;
+            self.start_send_frame(frame)?;
+          }
+          Poll::Pending => {
+            maybe_frame = Some(frame);
+            return Poll::Pending;
+          }
+        },
+        None => {
+          return self.poll_flush(stream, cx);
+        }
+      }
+    })
+    .await
+  }
+
+  /// Ensures that the underlying connection is ready. It will try to flush the contents if any.
+  ///
+  /// If you prefer to buffer requests as much as possible you can skip this step, generally and
+  /// call start_send_frame.
+  pub fn poll_ready<S>(
+    &mut self,
+    stream: &mut S,
+    cx: &mut Context<'_>,
+  ) -> Poll<Result<(), WebSocketError>>
+  where
+    S: AsyncWrite + Unpin,
+  {
+    if self.buffer.is_empty() {
+      Poll::Ready(Ok(()))
+    } else {
+      let written = ready!(pin!(&mut *stream).poll_write(cx, &self.buffer))?;
+      if written == 0 {
+        Poll::Ready(Err(WebSocketError::ConnectionClosed))
+      } else {
+        Poll::Ready(Ok(()))
+      }
+    }
   }
 
   /// Serializes a frame into the internal buffer.
+  ///
+  /// Beware of the internal buffer. If the other end of the connection is not consuming fast enough it might fill fast.
   ///
   /// This method is similar to [Sink::start_send](https://docs.rs/futures/latest/futures/sink/trait.Sink.html#tymethod.start_send).
   pub fn start_send_frame<'a>(
@@ -920,6 +965,8 @@ impl WriteHalf {
     } else if self.closed {
       return Err(WebSocketError::ConnectionClosed);
     }
+
+    // TODO(dgrr): Cap max payload size with a user setting?
 
     frame.fmt_head(&mut self.buffer);
     self.buffer.extend_from_slice(&frame.payload);
