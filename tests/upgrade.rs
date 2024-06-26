@@ -78,6 +78,7 @@ async fn hyper() {
   assert!(message.opcode == fastwebsockets::OpCode::Text);
   assert!(message.payload == b"Hello!");
 
+  eprintln!("saying goodbye");
   let_assert!(
     Ok(()) = stream
       .write_frame(fastwebsockets::Frame::text(b"Goodbye!".to_vec().into()))
@@ -85,6 +86,20 @@ async fn hyper() {
   );
   let_assert!(Ok(close_frame) = stream.read_frame().await);
   assert!(close_frame.opcode == fastwebsockets::OpCode::Close);
+  // let frame = stream.read_frame().await;
+  // // match frame {
+  // //   Err(e) => {
+  // //     eprintln!("frame is error {}", e);
+  // //   },
+  // //   Ok(result) => {
+  // //     eprintln!("frame is ok");
+  // //   }
+  // // }
+  // // let_assert!(Err(error) = frame);
+  // // let_assert!(error = WebSocketError::)
+  // // let_assert!(Ok(()) = Err({}));
+  // let_assert!(Ok(close_frame) = frame);
+  // assert!(close_frame.opcode == fastwebsockets::OpCode::Close);
 }
 
 async fn upgrade_websocket(
@@ -100,6 +115,7 @@ async fn upgrade_websocket(
     assert!(reply.opcode == fastwebsockets::OpCode::Text);
     assert!(reply.payload == b"Goodbye!");
 
+    eprintln!("server sending close frame");
     assert!(let Ok(()) = stream.write_frame(fastwebsockets::Frame::close_raw(vec![].into())).await);
   });
 
