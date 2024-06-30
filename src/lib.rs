@@ -269,7 +269,28 @@ pub(crate) struct ReadHalf {
   auto_pong: bool,
   writev_threshold: usize,
   max_message_size: usize,
+  read_state: Option<ReadState>,
   buffer: BytesMut,
+}
+
+struct Header {
+  fin: bool,
+  masked: bool,
+  opcode: OpCode,
+  extra: usize,
+  length_code: u8,
+  header_size: usize,
+}
+
+struct HeaderAndMask {
+  header: Header,
+  mask: Option<[u8; 4]>,
+  payload_len: usize,
+}
+
+enum ReadState {
+  Header(Header),
+  Payload(HeaderAndMask),
 }
 
 #[cfg(feature = "unstable-split")]
@@ -373,6 +394,7 @@ impl<'f, S> WebSocketRead<S> {
   }
 
   /// Reads a frame from the stream.
+  #[inline(always)]
   pub fn poll_read_frame<R, E>(
     &mut self,
     cx: &mut Context<'_>,
@@ -609,6 +631,7 @@ impl<'f, S> WebSocket<S> {
   /// Beware of the internal buffer. If the other end of the connection is not consuming fast enough it might fill fast.
   ///
   /// This method is similar to [Sink::start_send](https://docs.rs/futures/0.3.30/futures/sink/trait.Sink.html#tymethod.start_send).
+  #[inline(always)]
   pub fn poll_write_frame(
     &mut self,
     cx: &mut Context<'_>,
@@ -624,6 +647,7 @@ impl<'f, S> WebSocket<S> {
   /// Flushes the internal buffer into the Stream.
   ///
   /// Returns Poll::Ready(Ok(())) when no more bytes are left.
+  #[inline(always)]
   pub fn poll_flush(
     &mut self,
     cx: &mut Context<'_>,
@@ -663,6 +687,7 @@ impl<'f, S> WebSocket<S> {
   ///   Ok(())
   /// }
   /// ```
+  #[inline(always)]
   pub async fn read_frame(&mut self) -> Result<Frame<'f>, WebSocketError>
   where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -711,6 +736,7 @@ impl ReadHalf {
 
     Self {
       role,
+      read_state: None,
       auto_apply_mask: true,
       auto_close: true,
       auto_pong: true,
@@ -726,6 +752,7 @@ impl ReadHalf {
   /// has been closed.
   ///
   /// XXX: Do not expose this method to the public API.
+  #[inline(always)]
   pub(crate) async fn read_frame_inner<'f, S>(
     &mut self,
     stream: &mut S,
@@ -812,97 +839,143 @@ impl ReadHalf {
     S: AsyncRead + Unpin,
   {
     macro_rules! read_next {
-      () => {{
-        let bytes_read = ready!(tokio_util::io::poll_read_buf(
+      ($variant:expr,$value:expr) => {{
+        let bytes_read = match tokio_util::io::poll_read_buf(
           pin!(&mut *stream),
           cx,
-          &mut self.buffer
-        ))?;
+          &mut self.buffer,
+        ) {
+          Poll::Ready(ready) => ready,
+          Poll::Pending => {
+            self.read_state = Some($variant($value));
+            return Poll::Pending;
+          }
+        }?;
         if bytes_read == 0 {
           return Poll::Ready(Err(WebSocketError::UnexpectedEOF));
         }
       }};
     }
 
-    // Read the first two bytes
-    while self.buffer.remaining() < 2 {
-      read_next!();
+    loop {
+      match self.read_state.take() {
+        None => {
+          // Read the first two bytes
+          while self.buffer.remaining() < 2 {
+            let bytes_read = ready!(tokio_util::io::poll_read_buf(
+              pin!(&mut *stream),
+              cx,
+              &mut self.buffer
+            ))?;
+            if bytes_read == 0 {
+              return Poll::Ready(Err(WebSocketError::UnexpectedEOF));
+            }
+          }
+
+          let fin = self.buffer[0] & 0b10000000 != 0;
+          let rsv1 = self.buffer[0] & 0b01000000 != 0;
+          let rsv2 = self.buffer[0] & 0b00100000 != 0;
+          let rsv3 = self.buffer[0] & 0b00010000 != 0;
+
+          if rsv1 || rsv2 || rsv3 {
+            return Poll::Ready(Err(WebSocketError::ReservedBitsNotZero));
+          }
+
+          let opcode = frame::OpCode::try_from(self.buffer[0] & 0b00001111)?;
+          let masked = self.buffer[1] & 0b10000000 != 0;
+
+          let length_code = self.buffer[1] & 0x7F;
+          let extra = match length_code {
+            126 => 2,
+            127 => 8,
+            _ => 0,
+          };
+
+          let header_size = extra + masked as usize * 4;
+          self.buffer.advance(2);
+
+          self.read_state = Some(ReadState::Header(Header {
+            fin,
+            masked,
+            opcode,
+            length_code,
+            extra,
+            header_size,
+          }));
+        }
+        Some(ReadState::Header(header)) => {
+          // total header size
+          while self.buffer.remaining() < header.header_size {
+            read_next!(ReadState::Header, header);
+          }
+
+          let payload_len: usize = match header.extra {
+            0 => usize::from(header.length_code),
+            2 => self.buffer.get_u16() as usize,
+            #[cfg(any(
+              target_pointer_width = "64",
+              target_pointer_width = "128"
+            ))]
+            8 => self.buffer.get_u64() as usize,
+            // On 32bit systems, usize is only 4bytes wide so we must check for usize overflowing
+            #[cfg(any(
+              target_pointer_width = "8",
+              target_pointer_width = "16",
+              target_pointer_width = "32"
+            ))]
+            8 => match usize::try_from(self.buffer.get_u64()) {
+              Ok(length) => length,
+              Err(_) => return Err(WebSocketError::FrameTooLarge),
+            },
+            _ => unreachable!(),
+          };
+
+          let mask = if header.masked {
+            Some(self.buffer.get_u32().to_be_bytes())
+          } else {
+            None
+          };
+
+          if frame::is_control(header.opcode) && !header.fin {
+            return Poll::Ready(Err(WebSocketError::ControlFrameFragmented));
+          }
+
+          if header.opcode == OpCode::Ping && payload_len > 125 {
+            return Poll::Ready(Err(WebSocketError::PingFrameTooLarge));
+          }
+
+          if payload_len >= self.max_message_size {
+            return Poll::Ready(Err(WebSocketError::FrameTooLarge));
+          }
+
+          self.read_state = Some(ReadState::Payload(HeaderAndMask {
+            header,
+            mask,
+            payload_len,
+          }));
+        }
+        Some(ReadState::Payload(header_and_mask)) => {
+          // Reserve a bit more to try to get next frame header and avoid a syscall to read it next time
+          self.buffer.reserve(header_and_mask.payload_len + 14);
+          while self.buffer.remaining() < header_and_mask.payload_len {
+            read_next!(ReadState::Payload, header_and_mask);
+          }
+
+          let header = header_and_mask.header;
+          let mask = header_and_mask.mask;
+          let payload_len = header_and_mask.payload_len;
+
+          let payload = self.buffer.split_to(payload_len);
+          let frame = Frame::new(
+            header.fin,
+            header.opcode,
+            mask,
+            Payload::Bytes(payload),
+          );
+          break Poll::Ready(Ok(frame));
+        }
+      }
     }
-
-    let fin = self.buffer[0] & 0b10000000 != 0;
-    let rsv1 = self.buffer[0] & 0b01000000 != 0;
-    let rsv2 = self.buffer[0] & 0b00100000 != 0;
-    let rsv3 = self.buffer[0] & 0b00010000 != 0;
-
-    if rsv1 || rsv2 || rsv3 {
-      return Poll::Ready(Err(WebSocketError::ReservedBitsNotZero));
-    }
-
-    let opcode = frame::OpCode::try_from(self.buffer[0] & 0b00001111)?;
-    let masked = self.buffer[1] & 0b10000000 != 0;
-
-    let length_code = self.buffer[1] & 0x7F;
-    let extra = match length_code {
-      126 => 2,
-      127 => 8,
-      _ => 0,
-    };
-
-    // total header size
-    let header_size = 2 + extra + masked as usize * 4;
-    while self.buffer.remaining() < header_size {
-      read_next!();
-    }
-
-    let mut header = &self.buffer[2..header_size];
-
-    let payload_len: usize = match extra {
-      0 => usize::from(length_code),
-      2 => header.get_u16() as usize,
-      #[cfg(any(target_pointer_width = "64", target_pointer_width = "128"))]
-      8 => header.get_u64() as usize,
-      // On 32bit systems, usize is only 4bytes wide so we must check for usize overflowing
-      #[cfg(any(
-        target_pointer_width = "8",
-        target_pointer_width = "16",
-        target_pointer_width = "32"
-      ))]
-      8 => match usize::try_from(header.get_u64()) {
-        Ok(length) => length,
-        Err(_) => return Err(WebSocketError::FrameTooLarge),
-      },
-      _ => unreachable!(),
-    };
-
-    let mask = if masked {
-      Some(header.get_u32().to_be_bytes())
-    } else {
-      None
-    };
-
-    if frame::is_control(opcode) && !fin {
-      return Poll::Ready(Err(WebSocketError::ControlFrameFragmented));
-    }
-
-    if opcode == OpCode::Ping && payload_len > 125 {
-      return Poll::Ready(Err(WebSocketError::PingFrameTooLarge));
-    }
-
-    if payload_len >= self.max_message_size {
-      return Poll::Ready(Err(WebSocketError::FrameTooLarge));
-    }
-
-    // Reserve a bit more to try to get next frame header and avoid a syscall to read it next time
-    while header_size + payload_len > self.buffer.remaining() {
-      read_next!();
-    }
-
-    // if we read too much it will stay in the buffer, for the next call to this method
-    let mut message = self.buffer.split_to(payload_len + header_size);
-    // split the message off of header_size to get the payload.
-    let payload = message.split_off(header_size);
-    let frame = Frame::new(fin, opcode, mask, Payload::Bytes(payload));
-    Poll::Ready(Ok(frame))
   }
 }
 
