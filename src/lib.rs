@@ -1080,25 +1080,17 @@ impl WriteHalf {
   where
     S: AsyncWrite + Unpin,
   {
-    loop {
-      // try to flush before writing
-      if let Err(err) =
-        ready!(pin!(&mut *stream).poll_flush(cx)).map_err(Into::into)
-      {
-        break Poll::Ready(Err(err));
-      }
-
-      if self.buffer.is_empty() {
-        break Poll::Ready(Ok(()));
-      }
-
+    // flush the buffer
+    while !self.buffer.is_empty() {
       let written = ready!(pin!(&mut *stream).poll_write(cx, &self.buffer))?;
       if written == 0 {
-        break Poll::Ready(Err(WebSocketError::ConnectionClosed));
+        return Poll::Ready(Err(WebSocketError::ConnectionClosed));
       }
-
       self.buffer.advance(written);
     }
+
+    // flush the stream
+    Poll::Ready(ready!(pin!(&mut *stream).poll_flush(cx)).map_err(Into::into))
   }
 }
 
