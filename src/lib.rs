@@ -1042,6 +1042,7 @@ impl WriteHalf {
       if written == 0 {
         Poll::Ready(Err(WebSocketError::ConnectionClosed))
       } else {
+        self.buffer.advance(written);
         Poll::Ready(Ok(()))
       }
     }
