@@ -1046,8 +1046,8 @@ impl WriteHalf {
   /// call start_send_frame.
   pub fn poll_ready<S>(
     &mut self,
-    stream: &mut S,
-    cx: &mut Context<'_>,
+    _stream: &mut S,
+    _cx: &mut Context<'_>,
   ) -> Poll<Result<(), WebSocketError>>
   where
     S: AsyncWrite + Unpin,
@@ -1125,7 +1125,7 @@ impl WriteHalf {
     ready!(self.poll_ready(stream, cx))?;
 
     // flush the stream
-    Poll::Ready(ready!(pin!(&mut *stream).poll_flush(cx)).map_err(Into::into))
+    pin!(&mut *stream).poll_flush(cx).map_err(Into::into)
   }
 
   fn write<S>(

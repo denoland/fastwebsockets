@@ -321,6 +321,9 @@ impl<'f> Frame<'f> {
   }
 
   /// Writes the frame to the buffer and returns a slice of the buffer containing the frame.
+  ///
+  /// This function will NOT append the frame to the Vec, but rather replace the current bytes
+  /// with the frame's serialized bytes.
   pub fn write<'a>(&mut self, buf: &'a mut Vec<u8>) -> &'a [u8] {
     fn reserve_enough(buf: &mut Vec<u8>, len: usize) {
       if buf.len() < len {
