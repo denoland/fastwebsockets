@@ -1052,42 +1052,12 @@ impl WriteHalf {
   where
     S: AsyncWrite + Unpin,
   {
-    if self.read_head >= self.write_buffer.len() && self.payloads.is_empty() {
-      Poll::Ready(Ok(()))
-    } else {
-      let written = if let Some(front) = self.payloads.front_mut() {
-        let b = [
-          IoSlice::new(&self.write_buffer[self.read_head..front.position]),
-          IoSlice::new(&front.payload),
-        ];
-
-        let written = ready!(pin!(&mut *stream).poll_write_vectored(cx, &b))?;
-
-        if written < b[0].len() {
-          self.read_head += written;
-        } else {
-          let written = written - b[0].len();
-          self.read_head = front.position;
-          front.read_head += written;
-          if front.read_head == front.payload.len() {
-            self.payloads.pop_front();
-          }
-        }
-
-        written
-      } else {
-        let written = ready!(pin!(&mut *stream)
-          .poll_write(cx, &self.write_buffer[self.read_head..]))?;
-        self.read_head += written;
-        written
-      };
-
-      if written == 0 {
-        Poll::Ready(Err(WebSocketError::ConnectionClosed))
-      } else {
-        Poll::Ready(Ok(()))
-      }
+    while self.read_head < self.write_buffer.len() || !self.payloads.is_empty()
+    {
+      ready!(self.write(stream, cx))?;
     }
+
+    Poll::Ready(Ok(()))
   }
 
   pub fn start_send_frame<'a>(
@@ -1152,42 +1122,53 @@ impl WriteHalf {
   where
     S: AsyncWrite + Unpin,
   {
-    while self.read_head < self.write_buffer.len() || !self.payloads.is_empty()
-    {
-      let written = if let Some(front) = self.payloads.front_mut() {
-        let b = [
-          IoSlice::new(&self.write_buffer[self.read_head..front.position]),
-          IoSlice::new(&front.payload),
-        ];
-
-        let written = ready!(pin!(&mut *stream).poll_write_vectored(cx, &b))?;
-
-        if written < b[0].len() {
-          self.read_head += written;
-        } else {
-          let written = written - b[0].len();
-          self.read_head = front.position;
-          front.read_head += written;
-          if front.read_head == front.payload.len() {
-            self.payloads.pop_front();
-          }
-        }
-
-        written
-      } else {
-        let written = ready!(pin!(&mut *stream)
-          .poll_write(cx, &self.write_buffer[self.read_head..]))?;
-        self.read_head += written;
-        written
-      };
-
-      if written == 0 {
-        return Poll::Ready(Err(WebSocketError::ConnectionClosed));
-      }
-    }
+    ready!(self.poll_ready(stream, cx))?;
 
     // flush the stream
     Poll::Ready(ready!(pin!(&mut *stream).poll_flush(cx)).map_err(Into::into))
+  }
+
+  fn write<S>(
+    &mut self,
+    stream: &mut S,
+    cx: &mut Context<'_>,
+  ) -> Poll<Result<(), WebSocketError>>
+  where
+    S: AsyncWrite + Unpin,
+  {
+    let written = if let Some(front) = self.payloads.front_mut() {
+      let b = [
+        IoSlice::new(&self.write_buffer[self.read_head..front.position]),
+        IoSlice::new(&front.payload),
+      ];
+
+      let written = ready!(pin!(&mut *stream).poll_write_vectored(cx, &b))?;
+
+      if written < b[0].len() {
+        self.read_head += written;
+      } else {
+        let written = written - b[0].len();
+        self.read_head = front.position;
+        front.read_head += written;
+        if front.read_head == front.payload.len() {
+          self.payloads.pop_front();
+        }
+      }
+
+      written
+    } else {
+      let written =
+        ready!(pin!(&mut *stream)
+          .poll_write(cx, &self.write_buffer[self.read_head..]))?;
+      self.read_head += written;
+      written
+    };
+
+    if written == 0 {
+      return Poll::Ready(Err(WebSocketError::ConnectionClosed));
+    }
+
+    Poll::Ready(Ok(()))
   }
 }
 
