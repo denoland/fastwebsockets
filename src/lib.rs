@@ -259,7 +259,8 @@ pub(crate) struct WriteHalf {
   vectored: bool,
   auto_apply_mask: bool,
   writev_threshold: usize,
-  buffer: BytesMut,
+  buf_pos: usize,
+  buffer: Vec<u8>,
 }
 
 pub(crate) struct ReadHalf {
@@ -987,7 +988,8 @@ impl WriteHalf {
       auto_apply_mask: true,
       vectored: true,
       writev_threshold: 1024,
-      buffer: BytesMut::with_capacity(1024),
+      buf_pos: 0,
+      buffer: Vec::with_capacity(1024),
     }
   }
 
@@ -1035,14 +1037,16 @@ impl WriteHalf {
   where
     S: AsyncWrite + Unpin,
   {
-    if self.buffer.is_empty() {
+    if self.buf_pos >= self.buffer.len() {
       Poll::Ready(Ok(()))
     } else {
-      let written = ready!(pin!(&mut *stream).poll_write(cx, &self.buffer))?;
+      let written = ready!(
+        pin!(&mut *stream).poll_write(cx, &self.buffer[self.buf_pos..])
+      )?;
+      self.buf_pos += written;
       if written == 0 {
         Poll::Ready(Err(WebSocketError::ConnectionClosed))
       } else {
-        self.buffer.advance(written);
         Poll::Ready(Ok(()))
       }
     }
@@ -1066,6 +1070,8 @@ impl WriteHalf {
 
     // TODO(dgrr): Cap max payload size with a user setting?
 
+    self.buffer.splice(0..self.buf_pos, [0u8; 0]);
+    self.buf_pos = 0;
     frame.fmt_head(&mut self.buffer);
     self.buffer.extend_from_slice(&frame.payload);
 
@@ -1080,13 +1086,14 @@ impl WriteHalf {
   where
     S: AsyncWrite + Unpin,
   {
-    // flush the buffer
-    while !self.buffer.is_empty() {
-      let written = ready!(pin!(&mut *stream).poll_write(cx, &self.buffer))?;
+    while self.buf_pos < self.buffer.len() {
+      let written = ready!(
+        pin!(&mut *stream).poll_write(cx, &self.buffer[self.buf_pos..])
+      )?;
       if written == 0 {
         return Poll::Ready(Err(WebSocketError::ConnectionClosed));
       }
-      self.buffer.advance(written);
+      self.buf_pos += written;
     }
 
     // flush the stream
