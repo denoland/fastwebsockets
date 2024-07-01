@@ -14,7 +14,7 @@
 
 use tokio::io::AsyncWriteExt;
 
-use bytes::{BufMut, BytesMut};
+use bytes::BytesMut;
 use core::ops::Deref;
 
 use crate::WebSocketError;
@@ -138,7 +138,7 @@ pub struct Frame<'f> {
   pub payload: Payload<'f>,
 }
 
-const MAX_HEAD_SIZE: usize = 16;
+pub(crate) const MAX_HEAD_SIZE: usize = 16;
 
 impl<'f> Frame<'f> {
   /// Creates a new WebSocket `Frame`.
@@ -259,27 +259,26 @@ impl<'f> Frame<'f> {
   /// # Panics
   ///
   /// This method panics if the head buffer is not at least n-bytes long, where n is the size of the length field (0, 2, 4, or 10)
-  pub fn fmt_head(&mut self, mut head: impl BufMut) -> usize {
-    head.put_u8((self.fin as u8) << 7 | (self.opcode as u8));
-
-    let mask_bit = if self.mask.is_some() { 0x80 } else { 0x0 };
+  pub fn fmt_head(&mut self, head: &mut [u8]) -> usize {
+    head[0] = (self.fin as u8) << 7 | (self.opcode as u8);
 
     let len = self.payload.len();
     let size = if len < 126 {
-      head.put_u8(len as u8 | mask_bit);
+      head[1] = len as u8;
       2
     } else if len < 65536 {
-      head.put_u8(126u8 | mask_bit);
-      head.put_slice(&(len as u16).to_be_bytes());
+      head[1] = 126;
+      head[2..4].copy_from_slice(&(len as u16).to_be_bytes());
       4
     } else {
-      head.put_u8(127u8 | mask_bit);
-      head.put_slice(&(len as u64).to_be_bytes());
+      head[1] = 127;
+      head[2..10].copy_from_slice(&(len as u64).to_be_bytes());
       10
     };
 
     if let Some(mask) = self.mask {
-      head.put_slice(&mask);
+      head[1] |= 0x80;
+      head[size..size + 4].copy_from_slice(&mask);
       size + 4
     } else {
       size
@@ -296,7 +295,7 @@ impl<'f> Frame<'f> {
     use std::io::IoSlice;
 
     let mut head = [0; MAX_HEAD_SIZE];
-    let size = self.fmt_head(&mut head[..]);
+    let size = self.fmt_head(&mut head);
 
     let total = size + self.payload.len();
 
