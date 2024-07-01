@@ -259,7 +259,9 @@ pub(crate) struct WriteHalf {
   vectored: bool,
   auto_apply_mask: bool,
   writev_threshold: usize,
-  buffer: BytesMut,
+  buf: Vec<u8>,
+  buf_offset: usize,
+  frame_size: usize,
 }
 
 pub(crate) struct ReadHalf {
@@ -987,7 +989,9 @@ impl WriteHalf {
       auto_apply_mask: true,
       vectored: true,
       writev_threshold: 1024,
-      buffer: BytesMut::with_capacity(1024),
+      buf: Vec::with_capacity(1024),
+      frame_size: 0,
+      buf_offset: 0,
     }
   }
 
@@ -1029,23 +1033,15 @@ impl WriteHalf {
   /// call start_send_frame.
   pub fn poll_ready<S>(
     &mut self,
-    stream: &mut S,
-    cx: &mut Context<'_>,
+    _stream: &mut S,
+    _cx: &mut Context<'_>,
   ) -> Poll<Result<(), WebSocketError>>
   where
     S: AsyncWrite + Unpin,
   {
-    if self.buffer.is_empty() {
-      Poll::Ready(Ok(()))
-    } else {
-      let written = ready!(pin!(&mut *stream).poll_write(cx, &self.buffer))?;
-      if written == 0 {
-        Poll::Ready(Err(WebSocketError::ConnectionClosed))
-      } else {
-        self.buffer.advance(written);
-        Poll::Ready(Ok(()))
-      }
-    }
+    debug_assert_eq!(self.buf_offset, self.frame_size);
+    // underlying stream is supposed to always be ready
+    Poll::Ready(Ok(()))
   }
 
   pub fn start_send_frame<'a>(
@@ -1066,8 +1062,8 @@ impl WriteHalf {
 
     // TODO(dgrr): Cap max payload size with a user setting?
 
-    frame.fmt_head(&mut self.buffer);
-    self.buffer.extend_from_slice(&frame.payload);
+    self.buf_offset = 0;
+    self.frame_size = frame.write(&mut self.buf).len();
 
     Ok(())
   }
@@ -1081,16 +1077,17 @@ impl WriteHalf {
     S: AsyncWrite + Unpin,
   {
     // flush the buffer
-    while !self.buffer.is_empty() {
-      let written = ready!(pin!(&mut *stream).poll_write(cx, &self.buffer))?;
+    while self.buf_offset < self.frame_size {
+      let written = ready!(pin!(&mut *stream)
+        .poll_write(cx, &self.buf[self.buf_offset..self.frame_size]))?;
       if written == 0 {
         return Poll::Ready(Err(WebSocketError::ConnectionClosed));
       }
-      self.buffer.advance(written);
+      self.buf_offset += written;
     }
 
     // flush the stream
-    Poll::Ready(ready!(pin!(&mut *stream).poll_flush(cx)).map_err(Into::into))
+    pin!(&mut *stream).poll_flush(cx).map_err(Into::into)
   }
 }
 
