@@ -166,9 +166,13 @@ pub mod upgrade;
 
 use bytes::Buf;
 
+use bytes::Bytes;
 use bytes::BytesMut;
+use frame::MAX_HEAD_SIZE;
 use futures::task::AtomicWaker;
+use std::collections::VecDeque;
 use std::future::poll_fn;
+use std::io::IoSlice;
 use std::pin::pin;
 use std::sync::Arc;
 use std::task::ready;
@@ -259,9 +263,18 @@ pub(crate) struct WriteHalf {
   vectored: bool,
   auto_apply_mask: bool,
   writev_threshold: usize,
-  buf: Vec<u8>,
-  buf_offset: usize,
-  frame_size: usize,
+  write_buffer: Vec<u8>,
+  // where in the write_buffer we should read from when writing to the stream
+  read_head: usize,
+  // only used with vectored writes. stores the frame payloads
+  payloads: VecDeque<WriteBuffer>,
+}
+
+struct WriteBuffer {
+  // where in the write_buffer this payload should be inserted
+  position: usize,
+  read_head: usize,
+  payload: Payload<'static>,
 }
 
 pub(crate) struct ReadHalf {
@@ -989,9 +1002,9 @@ impl WriteHalf {
       auto_apply_mask: true,
       vectored: true,
       writev_threshold: 1024,
-      buf: Vec::with_capacity(1024),
-      frame_size: 0,
-      buf_offset: 0,
+      read_head: 0,
+      write_buffer: Vec::with_capacity(1024),
+      payloads: VecDeque::with_capacity(1),
     }
   }
 
@@ -1039,8 +1052,11 @@ impl WriteHalf {
   where
     S: AsyncWrite + Unpin,
   {
-    debug_assert_eq!(self.buf_offset, self.frame_size);
-    // underlying stream is supposed to always be ready
+    while self.read_head < self.write_buffer.len() || !self.payloads.is_empty()
+    {
+      ready!(self.write(stream, cx))?;
+    }
+
     Poll::Ready(Ok(()))
   }
 
@@ -1062,8 +1078,38 @@ impl WriteHalf {
 
     // TODO(dgrr): Cap max payload size with a user setting?
 
-    self.buf_offset = 0;
-    self.frame_size = frame.write(&mut self.buf).len();
+    let payload_len = frame.payload.len();
+    let max_len = payload_len + MAX_HEAD_SIZE;
+    if self.write_buffer.len() + max_len > self.write_buffer.capacity() {
+      // if the len we need for this frame will require a realloc, let's clear the written head of the buffer
+      self.write_buffer.splice(0..self.read_head, [0u8; 0]);
+      self.read_head = 0;
+      self.write_buffer.reserve(max_len);
+    }
+    // resize the buffer so we have room to write the head
+    let current_len = self.write_buffer.len();
+    self.write_buffer.resize(current_len + MAX_HEAD_SIZE, 0);
+
+    let buf = &mut self.write_buffer[current_len..];
+    let size = frame.fmt_head(buf);
+    self.write_buffer.truncate(current_len + size);
+
+    let vectored = self.vectored && frame.payload.len() > self.writev_threshold;
+    match frame.payload {
+      Payload::Owned(b) if vectored => self.payloads.push_back(WriteBuffer {
+        position: self.write_buffer.len(),
+        read_head: 0,
+        payload: Payload::Owned(b),
+      }),
+      Payload::Bytes(b) if vectored => self.payloads.push_back(WriteBuffer {
+        position: self.write_buffer.len(),
+        read_head: 0,
+        payload: Payload::Bytes(b),
+      }),
+      _ => {
+        self.write_buffer.extend_from_slice(&frame.payload);
+      }
+    }
 
     Ok(())
   }
@@ -1076,18 +1122,53 @@ impl WriteHalf {
   where
     S: AsyncWrite + Unpin,
   {
-    // flush the buffer
-    while self.buf_offset < self.frame_size {
-      let written = ready!(pin!(&mut *stream)
-        .poll_write(cx, &self.buf[self.buf_offset..self.frame_size]))?;
-      if written == 0 {
-        return Poll::Ready(Err(WebSocketError::ConnectionClosed));
-      }
-      self.buf_offset += written;
-    }
+    ready!(self.poll_ready(stream, cx))?;
 
     // flush the stream
     pin!(&mut *stream).poll_flush(cx).map_err(Into::into)
+  }
+
+  fn write<S>(
+    &mut self,
+    stream: &mut S,
+    cx: &mut Context<'_>,
+  ) -> Poll<Result<(), WebSocketError>>
+  where
+    S: AsyncWrite + Unpin,
+  {
+    let written = if let Some(front) = self.payloads.front_mut() {
+      let b = [
+        IoSlice::new(&self.write_buffer[self.read_head..front.position]),
+        IoSlice::new(&front.payload),
+      ];
+
+      let written = ready!(pin!(&mut *stream).poll_write_vectored(cx, &b))?;
+
+      if written < b[0].len() {
+        self.read_head += written;
+      } else {
+        let written = written - b[0].len();
+        self.read_head = front.position;
+        front.read_head += written;
+        if front.read_head == front.payload.len() {
+          self.payloads.pop_front();
+        }
+      }
+
+      written
+    } else {
+      let written =
+        ready!(pin!(&mut *stream)
+          .poll_write(cx, &self.write_buffer[self.read_head..]))?;
+      self.read_head += written;
+      written
+    };
+
+    if written == 0 {
+      return Poll::Ready(Err(WebSocketError::ConnectionClosed));
+    }
+
+    Poll::Ready(Ok(()))
   }
 }
 

@@ -138,7 +138,7 @@ pub struct Frame<'f> {
   pub payload: Payload<'f>,
 }
 
-const MAX_HEAD_SIZE: usize = 16;
+pub(crate) const MAX_HEAD_SIZE: usize = 16;
 
 impl<'f> Frame<'f> {
   /// Creates a new WebSocket `Frame`.
@@ -295,7 +295,7 @@ impl<'f> Frame<'f> {
     use std::io::IoSlice;
 
     let mut head = [0; MAX_HEAD_SIZE];
-    let size = self.fmt_head(&mut head[..]);
+    let size = self.fmt_head(&mut head);
 
     let total = size + self.payload.len();
 
