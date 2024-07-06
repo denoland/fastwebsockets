@@ -105,7 +105,7 @@ impl<'f, S> FragmentCollector<S> {
   {
     loop {
       let (res, obligated_send) =
-        self.read_half.read_frame_inner(&mut self.stream).await;
+        self.read_half.read_frame(&mut self.stream).await;
       let is_closed = self.write_half.closed;
       if let Some(obligated_send) = obligated_send {
         if !is_closed {
@@ -173,7 +173,7 @@ impl<'f, S> FragmentCollectorRead<S> {
   {
     loop {
       let (res, obligated_send) =
-        self.read_half.read_frame_inner(&mut self.stream).await;
+        self.read_half.read_frame(&mut self.stream).await;
       if let Some(frame) = obligated_send {
         let res = send_fn(frame).await;
         res.map_err(|e| WebSocketError::SendError(e.into()))?;

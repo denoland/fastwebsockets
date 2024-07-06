@@ -273,6 +273,7 @@ struct WriteBuffer {
   // where in the write_buffer this payload should be inserted
   position: usize,
   read_head: usize,
+  // TODO(dgrr): add a lifetime instead of using 'static?
   payload: Payload<'static>,
 }
 
@@ -396,7 +397,7 @@ impl<'f, S> WebSocketRead<S> {
   {
     loop {
       let (res, obligated_send) =
-        self.read_half.read_frame_inner(&mut self.stream).await;
+        self.read_half.read_frame(&mut self.stream).await;
       if let Some(frame) = obligated_send {
         let res = send_fn(frame).await;
         res.map_err(|e| WebSocketError::SendError(e.into()))?;
@@ -416,7 +417,7 @@ impl<'f, S> WebSocketRead<S> {
   where
     S: AsyncRead + Unpin,
   {
-    self.read_half.poll_read_frame_inner(&mut self.stream, cx)
+    self.read_half.poll_read_frame(&mut self.stream, cx)
   }
 }
 
@@ -719,7 +720,7 @@ impl<'f, S> WebSocket<S> {
   {
     loop {
       let (res, obligated_send) =
-        ready!(self.read_half.poll_read_frame_inner(&mut self.stream, cx));
+        ready!(self.read_half.poll_read_frame(&mut self.stream, cx));
 
       let is_closed = self.write_half.closed;
       if let Some(frame) = obligated_send {
@@ -767,18 +768,18 @@ impl ReadHalf {
   ///
   /// XXX: Do not expose this method to the public API.
   #[inline(always)]
-  pub(crate) async fn read_frame_inner<'f, S>(
+  pub(crate) async fn read_frame<'f, S>(
     &mut self,
     stream: &mut S,
   ) -> (Result<Option<Frame<'f>>, WebSocketError>, Option<Frame<'f>>)
   where
     S: AsyncRead + Unpin,
   {
-    poll_fn(|cx| self.poll_read_frame_inner(stream, cx)).await
+    poll_fn(|cx| self.poll_read_frame(stream, cx)).await
   }
 
   /// Reads a frame from the Stream.
-  pub(crate) fn poll_read_frame_inner<'f, S>(
+  pub(crate) fn poll_read_frame<'f, S>(
     &mut self,
     stream: &mut S,
     cx: &mut Context<'_>,
@@ -1063,7 +1064,7 @@ impl WriteHalf {
     &'a mut self,
     mut frame: Frame<'a>,
   ) -> Result<(), WebSocketError> {
-    // TODO: backpressure check?
+    // TODO(dario): backpressure check? tokio codec does it
 
     if self.role == Role::Client && self.auto_apply_mask {
       frame.mask();
@@ -1173,6 +1174,8 @@ impl WriteHalf {
 
 #[cfg(test)]
 mod tests {
+  use std::ops::Deref;
+
   use super::*;
 
   const _: () = {
@@ -1199,4 +1202,93 @@ mod tests {
     }
     assert_unsync::<WebSocket<tokio::net::TcpStream>>();
   };
+
+  #[tokio::test]
+  async fn test_contiguous_simple_and_vectored_writes() {
+    struct MockStream(Vec<u8>);
+
+    impl AsyncRead for MockStream {
+      fn poll_read(
+        self: std::pin::Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+      ) -> Poll<std::io::Result<()>> {
+        let this = self.get_mut();
+        if this.0.is_empty() {
+          return Poll::Ready(Ok(()));
+        }
+
+        let size_before = buf.filled().len();
+        buf.put_slice(&this.0);
+        let diff = buf.filled().len() - size_before;
+
+        this.0.drain(..diff);
+
+        Poll::Ready(Ok(()))
+      }
+    }
+
+    impl AsyncWrite for MockStream {
+      fn poll_write(
+        self: std::pin::Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+        buf: &[u8],
+      ) -> Poll<Result<usize, std::io::Error>> {
+        self.get_mut().0.extend_from_slice(buf);
+        Poll::Ready(Ok(buf.len()))
+      }
+
+      fn poll_flush(
+        self: std::pin::Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+      ) -> Poll<Result<(), std::io::Error>> {
+        Poll::Ready(Ok(()))
+      }
+
+      fn poll_shutdown(
+        self: std::pin::Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+      ) -> Poll<Result<(), std::io::Error>> {
+        Poll::Ready(Ok(()))
+      }
+    }
+
+    let simple_string = b"1234".to_vec();
+    // copy this string more than 1024 times to trigger the vector writes
+    let long_string = b"A".repeat(1025);
+
+    let mut stream = MockStream(vec![]);
+    let mut write_half = super::WriteHalf::after_handshake(Role::Server);
+    let mut read_half = super::ReadHalf::after_handshake(Role::Client);
+
+    poll_fn(|cx| {
+      // write
+      assert!(write_half.poll_ready(&mut stream, cx).is_ready());
+      // serialize both frames at the same time
+      assert!(write_half
+        .start_send_frame(Frame::text(Payload::Owned(simple_string.clone())))
+        .is_ok());
+      assert!(write_half
+        .start_send_frame(Frame::text(Payload::Owned(long_string.clone())))
+        .is_ok());
+      assert!(write_half.poll_flush(&mut stream, cx).is_ready());
+
+      // read
+      for body in [&simple_string, &long_string] {
+        let Poll::Ready((res, mandatory_send)) =
+          read_half.poll_read_frame(&mut stream, cx)
+        else {
+          unreachable!()
+        };
+
+        assert!(mandatory_send.is_none());
+
+        let frame = res.unwrap().unwrap();
+        assert_eq!(frame.payload.deref(), body);
+      }
+
+      Poll::Ready(())
+    })
+    .await;
+  }
 }
