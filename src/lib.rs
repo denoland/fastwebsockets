@@ -166,7 +166,6 @@ pub mod upgrade;
 
 use bytes::Buf;
 
-use bytes::Bytes;
 use bytes::BytesMut;
 use frame::MAX_HEAD_SIZE;
 use futures::task::AtomicWaker;
@@ -1046,8 +1045,8 @@ impl WriteHalf {
   /// call start_send_frame.
   pub fn poll_ready<S>(
     &mut self,
-    _stream: &mut S,
-    _cx: &mut Context<'_>,
+    stream: &mut S,
+    cx: &mut Context<'_>,
   ) -> Poll<Result<(), WebSocketError>>
   where
     S: AsyncWrite + Unpin,
