@@ -172,6 +172,9 @@ use futures::task::AtomicWaker;
 use std::collections::VecDeque;
 use std::future::poll_fn;
 use std::io::IoSlice;
+use std::mem;
+use std::ops::Deref;
+use std::ops::DerefMut;
 use std::pin::pin;
 use std::sync::Arc;
 use std::task::ready;
@@ -473,9 +476,59 @@ impl<'f, S> WebSocketWrite<S> {
   }
 }
 
+/// Keep track of the state of the Stream
+enum StreamState<S> {
+  // reading from Stream
+  Reading(S),
+  // flushing obligated send
+  Flushing(S),
+  // keep the stream here just in case the user wants to access to it
+  Closed(S),
+  // used temporarily
+  None,
+}
+
+impl<S> Deref for StreamState<S> {
+  type Target = S;
+
+  #[inline(always)]
+  fn deref(&self) -> &Self::Target {
+    match self {
+      StreamState::Reading(stream) => stream,
+      StreamState::Flushing(stream) => stream,
+      StreamState::Closed(stream) => stream,
+      StreamState::None => unreachable!(),
+    }
+  }
+}
+
+impl<S> DerefMut for StreamState<S> {
+  #[inline(always)]
+  fn deref_mut(&mut self) -> &mut Self::Target {
+    match self {
+      StreamState::Reading(stream) => stream,
+      StreamState::Flushing(stream) => stream,
+      StreamState::Closed(stream) => stream,
+      StreamState::None => unreachable!(),
+    }
+  }
+}
+
+impl<S> StreamState<S> {
+  #[inline(always)]
+  fn into_inner(self) -> S {
+    match self {
+      StreamState::Reading(stream) => stream,
+      StreamState::Flushing(stream) => stream,
+      StreamState::Closed(stream) => stream,
+      StreamState::None => unreachable!(),
+    }
+  }
+}
+
 /// WebSocket protocol implementation over an async stream.
 pub struct WebSocket<S> {
-  stream: S,
+  stream: StreamState<S>,
   write_half: WriteHalf,
   read_half: ReadHalf,
   waker: Arc<WakerDemux>,
@@ -507,8 +560,8 @@ impl<'f, S> WebSocket<S> {
   {
     let waker = Arc::new(WakerDemux::default());
     Self {
-      stream,
       waker,
+      stream: StreamState::Reading(stream),
       write_half: WriteHalf::after_handshake(role),
       read_half: ReadHalf::after_handshake(role),
     }
@@ -545,13 +598,13 @@ impl<'f, S> WebSocket<S> {
   #[inline]
   pub fn into_inner(self) -> S {
     // self.write_half.into_inner().stream
-    self.stream
+    self.stream.into_inner()
   }
 
   /// Consumes the `WebSocket` and returns the underlying stream.
   #[inline]
   pub(crate) fn into_parts_internal(self) -> (S, ReadHalf, WriteHalf) {
-    (self.stream, self.read_half, self.write_half)
+    (self.stream.into_inner(), self.read_half, self.write_half)
   }
 
   /// Sets whether to use vectored writes. This option does not guarantee that vectored writes will be always used.
@@ -624,7 +677,10 @@ impl<'f, S> WebSocket<S> {
   where
     S: AsyncRead + AsyncWrite + Unpin,
   {
-    self.write_half.write_frame(&mut self.stream, frame).await?;
+    self
+      .write_half
+      .write_frame(self.stream.deref_mut(), frame)
+      .await?;
     Ok(())
   }
 
@@ -671,9 +727,9 @@ impl<'f, S> WebSocket<S> {
     S: AsyncWrite + Unpin,
   {
     self.waker.set_waker(ContextKind::Write, cx.waker());
-    self
-      .waker
-      .with_context(|cx| self.write_half.poll_flush(&mut self.stream, cx))
+    self.waker.with_context(|cx| {
+      self.write_half.poll_flush(self.stream.deref_mut(), cx)
+    })
   }
 
   /// Reads a frame from the stream.
@@ -719,27 +775,72 @@ impl<'f, S> WebSocket<S> {
     S: AsyncRead + AsyncWrite + Unpin,
   {
     loop {
-      let (res, obligated_send) =
-        ready!(self.read_half.poll_read_frame(&mut self.stream, cx));
+      match mem::replace(&mut self.stream, StreamState::None) {
+        StreamState::None => unreachable!(),
+        StreamState::Reading(mut stream) => {
+          let (res, obligated_send) =
+            match self.read_half.poll_read_frame(&mut stream, cx) {
+              Poll::Ready(res) => res,
+              Poll::Pending => {
+                self.stream = StreamState::Reading(stream);
+                break Poll::Pending;
+              }
+            };
 
-      let is_closed = self.write_half.closed;
-      if let Some(frame) = obligated_send {
-        if !is_closed {
-          self.write_half.start_send_frame(frame)?;
+          let is_closed = self.write_half.closed;
+
+          macro_rules! try_send_obligated {
+            () => {
+              if let Some(frame) = obligated_send {
+                // if the write half didn't emit the close frame
+                if !is_closed {
+                  self.write_half.start_send_frame(frame)?;
+                  self.stream = StreamState::Flushing(stream);
+                } else {
+                  self.stream = StreamState::Reading(stream);
+                }
+              } else {
+                self.stream = StreamState::Reading(stream);
+              }
+            };
+          }
+
+          if let Some(frame) = res? {
+            if is_closed && frame.opcode != OpCode::Close {
+              self.stream = StreamState::Closed(stream);
+              break Poll::Ready(Err(WebSocketError::ConnectionClosed));
+            }
+
+            try_send_obligated!();
+            break Poll::Ready(Ok(frame));
+          }
+
+          try_send_obligated!();
+        }
+        StreamState::Flushing(mut stream) => {
           self.waker.set_waker(ContextKind::Read, cx.waker());
-          let res = self.waker.with_context(|cx| {
-            self.write_half.poll_flush(&mut self.stream, cx)
-          });
-          ready!(res)?;
-        }
-      }
 
-      if let Some(frame) = res? {
-        if is_closed && frame.opcode != OpCode::Close {
-          return Poll::Ready(Err(WebSocketError::ConnectionClosed));
+          let res = self
+            .waker
+            .with_context(|cx| self.write_half.poll_flush(&mut stream, cx));
+          match res {
+            Poll::Ready(ok) => {
+              self.stream = if self.is_closed() {
+                StreamState::Closed(stream)
+              } else {
+                StreamState::Reading(stream)
+              };
+              ok?;
+            }
+            Poll::Pending => {
+              self.stream = StreamState::Flushing(stream);
+            }
+          }
         }
-
-        break Poll::Ready(Ok(frame));
+        StreamState::Closed(stream) => {
+          self.stream = StreamState::Closed(stream);
+          break Poll::Ready(Err(WebSocketError::ConnectionClosed));
+        }
       }
     }
   }
