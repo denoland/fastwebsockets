@@ -138,7 +138,7 @@ pub struct Frame<'f> {
   pub payload: Payload<'f>,
 }
 
-const MAX_HEAD_SIZE: usize = 16;
+pub(crate) const MAX_HEAD_SIZE: usize = 16;
 
 impl<'f> Frame<'f> {
   /// Creates a new WebSocket `Frame`.
@@ -321,6 +321,9 @@ impl<'f> Frame<'f> {
   }
 
   /// Writes the frame to the buffer and returns a slice of the buffer containing the frame.
+  ///
+  /// This function will NOT append the frame to the Vec, but rather replace the current bytes
+  /// with the frame's serialized bytes.
   pub fn write<'a>(&mut self, buf: &'a mut Vec<u8>) -> &'a [u8] {
     fn reserve_enough(buf: &mut Vec<u8>, len: usize) {
       if buf.len() < len {
@@ -330,7 +333,7 @@ impl<'f> Frame<'f> {
     let len = self.payload.len();
     reserve_enough(buf, len + MAX_HEAD_SIZE);
 
-    let size = self.fmt_head(buf);
+    let size = self.fmt_head(&mut *buf);
     buf[size..size + len].copy_from_slice(&self.payload);
     &buf[..size + len]
   }
