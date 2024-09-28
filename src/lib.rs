@@ -333,7 +333,7 @@ pub fn after_handshake_split<R, W>(
   role: Role,
 ) -> (WebSocketRead<R>, WebSocketWrite<W>)
 where
-  R: AsyncWrite + Unpin,
+  R: AsyncRead + Unpin,
   W: AsyncWrite + Unpin,
 {
   (
