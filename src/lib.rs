@@ -342,6 +342,21 @@ impl<'f, S> WebSocketWrite<S> {
   {
     self.write_half.write_frame(&mut self.stream, frame).await
   }
+
+  pub async fn flush(&mut self) -> Result<(), WebSocketError>
+  where
+    S: AsyncWrite + Unpin,
+  {
+    flush(&mut self.stream).await
+  }
+}
+
+#[inline]
+async fn flush<S>(stream: &mut S) -> Result<(), WebSocketError>
+where
+  S: AsyncWrite + Unpin,
+{
+  stream.flush().await.map_err(|e| WebSocketError::IoError(e))
 }
 
 /// WebSocket protocol implementation over an async stream.
@@ -493,6 +508,18 @@ impl<'f, S> WebSocket<S> {
   {
     self.write_half.write_frame(&mut self.stream, frame).await?;
     Ok(())
+  }
+
+  /// Flushes the data from the underlying stream.
+  ///
+  /// if the underlying stream is buffered (i.e: TlsStream<TcpStream>), it is needed to call flush
+  /// to be sure that the written frame are correctly pushed down to the bottom stream/channel.
+  ///
+  pub async fn flush(&mut self) -> Result<(), WebSocketError>
+  where
+    S: AsyncWrite + Unpin,
+  {
+    flush(&mut self.stream).await
   }
 
   /// Reads a frame from the stream.
