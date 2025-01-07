@@ -95,7 +95,7 @@ pub enum CloseCode {
 impl CloseCode {
   /// Check if this CloseCode is allowed.
   pub fn is_allowed(self) -> bool {
-    !matches!(self, Bad(_) | Reserved(_) | Status | Abnormal | Tls)
+    !matches!(self, Bad(_) | Reserved(_) | Abnormal | Tls)
   }
 }
 
