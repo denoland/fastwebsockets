@@ -73,7 +73,7 @@ impl IncomingUpgrade {
 #[cfg(feature = "with_axum")]
 impl<S> axum_core::extract::FromRequestParts<S> for IncomingUpgrade
 where
-    S: Send + Sync,
+  S: Send + Sync,
 {
   type Rejection = hyper::StatusCode;
 
