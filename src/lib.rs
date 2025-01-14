@@ -356,7 +356,7 @@ async fn flush<S>(stream: &mut S) -> Result<(), WebSocketError>
 where
   S: AsyncWrite + Unpin,
 {
-  stream.flush().await.map_err(|e| WebSocketError::IoError(e))
+  stream.flush().await.map_err(WebSocketError::IoError)
 }
 
 /// WebSocket protocol implementation over an async stream.
