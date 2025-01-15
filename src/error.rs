@@ -9,7 +9,7 @@ pub enum WebSocketError {
   #[error("Invalid continuation frame")]
   InvalidContinuationFrame,
   #[error("Invalid status code")]
-  InvalidStatusCode,
+  InvalidStatusCode(u16),
   #[error("Invalid upgrade header")]
   InvalidUpgradeHeader,
   #[error("Invalid connection header")]

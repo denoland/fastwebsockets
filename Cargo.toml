@@ -8,20 +8,14 @@ edition = "2021"
 repository = "https://github.com/denoland/fastwebsockets"
 
 [[example]]
+name = "echo_client"
+path = "examples/echo_client.rs"
+required-features = ["upgrade"]
+
+[[example]]
 name = "echo_server"
 path = "examples/echo_server.rs"
 required-features = ["upgrade"]
-
-[[example]]
-name = "monoio_server"
-path = "examples/monoio_server.rs"
-required-features = ["upgrade"]
-
-[[example]]
-name = "monoio_tlsclient"
-path = "examples/monoio_tlsclient.rs"
-required-features = ["upgrade"]
-
 
 [[example]]
 name = "autobahn_client"
@@ -33,34 +27,57 @@ name = "tls_client"
 path = "examples/tls_client.rs"
 required-features = ["upgrade"]
 
+[[example]]
+name = "tls_client_binance"
+path = "examples/tls_client_binance.rs"
+required-features = ["upgrade"]
+
+[[example]]
+name = "tls_server"
+path = "examples/tls_server.rs"
+required-features = ["upgrade"]
+
 [dependencies]
 tokio = { version = "1.25.0",  default-features = false, features = ["io-util"] }
 simdutf8 = { version = "0.1.4", optional = true }
-hyper = { version = "0.14.26", features = ["http1", "server", "client"], optional = true }
+hyper = { version = "1.0", features = ["http1", "server", "client"], optional = true }
 pin-project = { version = "1.0.8", optional = true }
 base64 = { version = "0.21.0", optional = true }
 sha1 = { version = "0.10.5", optional = true }
 utf-8 = "0.7.5"
 rand = "0.8.4"
 thiserror = "1.0.40"
+proc-macro2 = "1.0.53"  
+hyper-util = { version = "0.1.10", features = ["tokio"]}
+http-body-util = "0.1.2"
+bytes = "1.9.0"
 
 [features]
-default = ["simd"]
+default = ["simd", "upgrade"]
 simd = ["simdutf8/aarch64_neon"]
 upgrade = ["hyper", "pin-project", "base64", "sha1"]
 
 [dev-dependencies]
-tokio = { version = "1.25.0", features = ["full", "macros"] }
+tokio = { version = "1.42.0",  default-features = false, features = ["io-util"] }
 tokio-rustls = "0.24.0"
 rustls-pemfile = "1.0"
-hyper = { version = "0.14.26", features = ["http1", "server", "client", "tcp"] }
+hyper = { version = "1.0", features = ["http1", "server", "client"] }
 assert2 = "0.3.4"
 trybuild = "1.0.80"
 criterion = "0.4.0"
 anyhow = "1.0.71"
 webpki-roots = "0.23.0"
-monoio = { version = "0.1.9",  default-features = false, features = ["async-cancel", "sync", "bytes", "legacy", "macros", "utils", "tokio-compat"] }
-monoio-compat = { version = "0.1.2" }
+monoio = { version = "0.2.4", default-features = false, features = [
+    "async-cancel",
+    "sync",
+    "bytes",
+    "iouring",
+    "legacy",
+    "macros",
+    "utils",
+    "poll-io",      # experimental
+] }
+monoio-compat = { version = "0.2.2", features = ["hyper"] }
 
 [[bench]]
 name = "unmask"

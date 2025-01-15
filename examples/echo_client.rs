@@ -1,17 +1,19 @@
+use bytes::Bytes;
 use fastwebsockets::Frame;
 use fastwebsockets::OpCode;
 use fastwebsockets::WebSocketError;
 use fastwebsockets::{self};
+use http_body_util::Empty;
 use hyper::Request;
 use hyper::Uri;
+use monoio::io::IntoPollIo;
 use monoio::net::TcpStream;
 use rand::Rng;
 use std::future::Future;
 
 async fn handle_websocket_upgrade(uri: Uri) -> Result<(), WebSocketError> {
-  // 1. 创建HTTP客户端
   let stream = TcpStream::connect("127.0.0.1:8080").await?;
-  let conn = HyperConnection(stream);
+  let conn = HyperConnection(stream.into_poll_io()?);
 
   let sec_websocket_key = generate_sec_websocket_key();
   let req = Request::builder()
@@ -21,7 +23,7 @@ async fn handle_websocket_upgrade(uri: Uri) -> Result<(), WebSocketError> {
     .header("Connection", "Upgrade")
     .header("Sec-WebSocket-Key", sec_websocket_key)
     .header("Sec-WebSocket-Version", "13") // WebSocket 版本
-    .body(hyper::Body::empty())
+    .body(Empty::<Bytes>::new())
     .expect("Failed to build request");
   let (mut ws, _) =
     fastwebsockets::handshake::client(&HyperExecutor, req, conn).await?;
@@ -72,7 +74,7 @@ fn generate_sec_websocket_key() -> String {
   base64::encode(random_bytes)
 }
 use std::pin::Pin;
-pub struct HyperConnection(monoio::net::TcpStream);
+struct HyperConnection(monoio::net::tcp::stream_poll::TcpStreamPoll);
 
 impl tokio::io::AsyncRead for HyperConnection {
   #[inline]
@@ -109,13 +111,6 @@ impl tokio::io::AsyncWrite for HyperConnection {
     cx: &mut std::task::Context<'_>,
   ) -> std::task::Poll<Result<(), std::io::Error>> {
     Pin::new(&mut self.0).poll_shutdown(cx)
-  }
-}
-
-impl hyper::client::connect::Connection for HyperConnection {
-  #[inline]
-  fn connected(&self) -> hyper::client::connect::Connected {
-    hyper::client::connect::Connected::new()
   }
 }
 

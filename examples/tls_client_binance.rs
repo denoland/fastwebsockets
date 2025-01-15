@@ -3,7 +3,6 @@ use fastwebsockets::Frame;
 use fastwebsockets::OpCode;
 use fastwebsockets::WebSocketError;
 use fastwebsockets::{self};
-use hyper::Body;
 use hyper::Request;
 use hyper::Uri;
 use monoio::net::TcpStream;
@@ -12,6 +11,9 @@ use std::sync::Arc;
 use tokio_rustls::rustls::ClientConfig;
 use tokio_rustls::rustls::OwnedTrustAnchor;
 use tokio_rustls::TlsConnector;
+use monoio::io::IntoPollIo;
+use bytes::Bytes;
+use http_body_util::Empty;
 
 #[allow(deprecated)]
 fn tls_connector() -> Result<TlsConnector> {
@@ -44,7 +46,7 @@ async fn handle_websocket_upgrade(
   let port = uri.port_u16().unwrap_or(port);
   let addr = format!("{}:{}", host, port);
   let stream = TcpStream::connect(&addr).await?;
-  let tcp_stream = HyperConnection(stream);
+  let tcp_stream = HyperConnection(stream.into_poll_io()?);
   println!("Connected to: {:?}", addr);
   let domain =
     tokio_rustls::rustls::ServerName::try_from(uri.to_string().as_str())
@@ -67,7 +69,7 @@ async fn handle_websocket_upgrade(
       fastwebsockets::handshake::generate_key(),
     )
     .header("Sec-WebSocket-Version", "13") // WebSocket 版本
-    .body(Body::empty())
+    .body(Empty::<Bytes>::new())
     .expect("Failed to build request");
 
   let (mut ws, _) =
@@ -121,8 +123,7 @@ where
 }
 
 use std::pin::Pin;
-// struct HyperConnection(monoio::net::tcp::stream_poll::TcpStreamPoll);
-struct HyperConnection(monoio::net::TcpStream);
+struct HyperConnection(monoio::net::tcp::stream_poll::TcpStreamPoll);
 
 impl tokio::io::AsyncRead for HyperConnection {
   #[inline]
@@ -162,11 +163,5 @@ impl tokio::io::AsyncWrite for HyperConnection {
   }
 }
 
-impl hyper::client::connect::Connection for HyperConnection {
-  #[inline]
-  fn connected(&self) -> hyper::client::connect::Connected {
-    hyper::client::connect::Connected::new()
-  }
-}
 
 unsafe impl Send for HyperConnection {}

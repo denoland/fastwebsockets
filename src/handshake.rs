@@ -13,24 +13,23 @@
 // limitations under the License.
 
 use hyper::upgrade::Upgraded;
-use hyper::Body;
 use hyper::Request;
 use hyper::Response;
 use hyper::StatusCode;
+use hyper::body::Incoming;
 
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 
 use tokio::io::AsyncRead;
 use tokio::io::AsyncWrite;
-
+use hyper_util::rt::TokioIo;
 use std::future::Future;
 use std::pin::Pin;
 
 use crate::Role;
 use crate::WebSocket;
 use crate::WebSocketError;
-
 /// Perform the client handshake.
 ///
 /// This function is used to perform the client handshake. It takes a hyper
@@ -79,18 +78,21 @@ use crate::WebSocketError;
 ///   }
 /// }
 /// ```
-pub async fn client<S, E>(
+pub async fn client<S, E, B>(
   executor: &E,
-  request: Request<Body>,
+  request: Request<B>,
   socket: S,
-) -> Result<(WebSocket<Upgraded>, Response<Body>), WebSocketError>
+) -> Result<(WebSocket<TokioIo<Upgraded>>, Response<Incoming>), WebSocketError>
 where
+  B: hyper::body::Body + Send + 'static,
+  B::Data: Send,
+  B::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
   S: AsyncRead + AsyncWrite + Send + Unpin + 'static,
   E: hyper::rt::Executor<Pin<Box<dyn Future<Output = ()> + Send>>>,
 {
-  let (mut sender, conn) = hyper::client::conn::handshake(socket).await?;
+  let (mut sender, conn) = hyper::client::conn::http1::handshake(TokioIo::new(socket)).await?;
   let fut = Box::pin(async move {
-    if let Err(e) = conn.await {
+    if let Err(e) = conn.with_upgrades().await {
       eprintln!("Error polling connection: {}", e);
     }
   });
@@ -100,9 +102,10 @@ where
   verify(&response)?;
 
   match hyper::upgrade::on(&mut response).await {
-    Ok(upgraded) => {
-      Ok((WebSocket::after_handshake(upgraded, Role::Client), response))
-    }
+    Ok(upgraded) => Ok((
+      WebSocket::after_handshake(TokioIo::new(upgraded), Role::Client),
+      response,
+    )),
     Err(e) => Err(e.into()),
   }
 }
@@ -116,9 +119,11 @@ pub fn generate_key() -> String {
 }
 
 // https://github.com/snapview/tungstenite-rs/blob/314feea3055a93e585882fb769854a912a7e6dae/src/handshake/client.rs#L189
-fn verify(response: &Response<Body>) -> Result<(), WebSocketError> {
+fn verify(response: &Response<Incoming>) -> Result<(), WebSocketError> {
   if response.status() != StatusCode::SWITCHING_PROTOCOLS {
-    return Err(WebSocketError::InvalidStatusCode);
+    return Err(WebSocketError::InvalidStatusCode(
+      response.status().as_u16(),
+    ));
   }
 
   let headers = response.headers();

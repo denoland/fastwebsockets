@@ -12,15 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use bytes::Bytes;
 use fastwebsockets::upgrade;
 use fastwebsockets::OpCode;
 use fastwebsockets::WebSocketError;
-use hyper::server::conn::Http;
+use http_body_util::Empty;
+use hyper::body::Incoming;
+use hyper::server::conn::http1;
 use hyper::service::service_fn;
-use hyper::Body;
 use hyper::Request;
 use hyper::Response;
-use tokio::net::TcpListener;
+use monoio::io::IntoPollIo;
 
 async fn handle_client(fut: upgrade::UpgradeFut) -> Result<(), WebSocketError> {
   let mut ws = fastwebsockets::FragmentCollector::new(fut.await?);
@@ -39,12 +41,12 @@ async fn handle_client(fut: upgrade::UpgradeFut) -> Result<(), WebSocketError> {
   Ok(())
 }
 async fn server_upgrade(
-  mut req: Request<Body>,
-) -> Result<Response<Body>, WebSocketError> {
+  mut req: Request<Incoming>,
+) -> Result<Response<Empty<Bytes>>, WebSocketError> {
   let (response, fut) = upgrade::upgrade(&mut req)?;
 
-  tokio::task::spawn(async move {
-    if let Err(e) = tokio::task::unconstrained(handle_client(fut)).await {
+  monoio::spawn(async move {
+    if let Err(e) = handle_client(fut).await {
       eprintln!("Error in websocket connection: {}", e);
     }
   });
@@ -52,26 +54,69 @@ async fn server_upgrade(
   Ok(response)
 }
 
-fn main() -> Result<(), WebSocketError> {
-  let rt = tokio::runtime::Builder::new_current_thread()
-    .enable_io()
-    .build()
-    .unwrap();
+#[monoio::main]
+async fn main() -> Result<(), WebSocketError> {
+  let listener = monoio::net::TcpListener::bind("127.0.0.1:8080").unwrap();
 
-  rt.block_on(async move {
-    let listener = TcpListener::bind("127.0.0.1:8080").await?;
-    println!("Server started, listening on {}", "127.0.0.1:8080");
-    loop {
-      let (stream, _) = listener.accept().await?;
-      println!("Client connected");
-      tokio::spawn(async move {
-        let conn_fut = Http::new()
-          .serve_connection(stream, service_fn(server_upgrade))
-          .with_upgrades();
-        if let Err(e) = conn_fut.await {
-          println!("An error occurred: {:?}", e);
-        }
-      });
-    }
-  })
+  println!("Server started, listening on 127.0.0.1:8080");
+  loop {
+    let (stream, _) = listener.accept().await?;
+
+    let hyper_conn = HyperConnection(stream.into_poll_io()?);
+    println!("Client connected");
+    monoio::spawn(async move {
+      let io = hyper_util::rt::TokioIo::new(hyper_conn);
+      let conn_fut = http1::Builder::new()
+        .serve_connection(io, service_fn(server_upgrade))
+        .with_upgrades();
+      if let Err(e) = conn_fut.await {
+        println!("An error occurred: {:?}", e);
+      }
+    });
+  }
 }
+
+use std::pin::Pin;
+struct HyperConnection(monoio::net::tcp::stream_poll::TcpStreamPoll);
+
+impl tokio::io::AsyncRead for HyperConnection {
+  #[inline]
+  fn poll_read(
+    mut self: Pin<&mut Self>,
+    cx: &mut std::task::Context<'_>,
+    buf: &mut tokio::io::ReadBuf<'_>,
+  ) -> std::task::Poll<std::io::Result<()>> {
+    Pin::new(&mut self.0).poll_read(cx, buf)
+  }
+}
+
+impl tokio::io::AsyncWrite for HyperConnection {
+  #[inline]
+  fn poll_write(
+    mut self: Pin<&mut Self>,
+    cx: &mut std::task::Context<'_>,
+    buf: &[u8],
+  ) -> std::task::Poll<Result<usize, std::io::Error>> {
+    Pin::new(&mut self.0).poll_write(cx, buf)
+  }
+
+  #[inline]
+  fn poll_flush(
+    mut self: Pin<&mut Self>,
+    cx: &mut std::task::Context<'_>,
+  ) -> std::task::Poll<Result<(), std::io::Error>> {
+    Pin::new(&mut self.0).poll_flush(cx)
+  }
+
+  #[inline]
+  fn poll_shutdown(
+    mut self: Pin<&mut Self>,
+    cx: &mut std::task::Context<'_>,
+  ) -> std::task::Poll<Result<(), std::io::Error>> {
+    Pin::new(&mut self.0).poll_shutdown(cx)
+  }
+}
+
+
+#[allow(clippy::non_send_fields_in_send_ty)]
+unsafe impl Send for HyperConnection {}

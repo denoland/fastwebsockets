@@ -11,26 +11,26 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-
-use anyhow::Result;
 use fastwebsockets::upgrade;
 use fastwebsockets::OpCode;
-use hyper::server::conn::Http;
+use fastwebsockets::WebSocketError;
+use hyper::body::Incoming;
 use hyper::service::service_fn;
-use hyper::Body;
 use hyper::Request;
 use hyper::Response;
-use std::sync::Arc;
-use tokio::net::TcpListener;
+use hyper::server::conn::http1;
+use http_body_util::Empty;
+use hyper::body::Bytes;
 use tokio_rustls::rustls;
 use tokio_rustls::rustls::Certificate;
 use tokio_rustls::rustls::PrivateKey;
 use tokio_rustls::TlsAcceptor;
+use anyhow::Result;
+use std::sync::Arc;
+use monoio::io::IntoPollIo;
 
-async fn handle_client(fut: upgrade::UpgradeFut) -> Result<()> {
-  let mut ws = fut.await?;
-  ws.set_writev(false);
-  let mut ws = fastwebsockets::FragmentCollector::new(ws);
+async fn handle_client(fut: upgrade::UpgradeFut) -> Result<(), WebSocketError> {
+  let mut ws = fastwebsockets::FragmentCollector::new(fut.await?);
 
   loop {
     let frame = ws.read_frame().await?;
@@ -45,11 +45,12 @@ async fn handle_client(fut: upgrade::UpgradeFut) -> Result<()> {
 
   Ok(())
 }
-
-async fn server_upgrade(mut req: Request<Body>) -> Result<Response<Body>> {
+async fn server_upgrade(
+  mut req: Request<Incoming>,
+) -> Result<Response<Empty::<Bytes>>, WebSocketError> {
   let (response, fut) = upgrade::upgrade(&mut req)?;
 
-  tokio::spawn(async move {
+  monoio::spawn(async move {
     if let Err(e) = handle_client(fut).await {
       eprintln!("Error in websocket connection: {}", e);
     }
@@ -66,34 +67,89 @@ fn tls_acceptor() -> Result<TlsAcceptor> {
     rustls_pemfile::pkcs8_private_keys(&mut &*KEY)
       .map(|mut certs| certs.drain(..).map(PrivateKey).collect())
       .unwrap();
-  let certs = rustls_pemfile::certs(&mut &*CERT)
+  let certs: Vec<Certificate> = rustls_pemfile::certs(&mut &*CERT)
     .map(|mut certs| certs.drain(..).map(Certificate).collect())
     .unwrap();
   dbg!(&certs);
   let config = rustls::ServerConfig::builder()
     .with_safe_defaults()
     .with_no_client_auth()
-    .with_single_cert(certs, keys.remove(0))?;
+    .with_single_cert(certs, keys.remove(0)).unwrap();
   Ok(TlsAcceptor::from(Arc::new(config)))
 }
 
-#[tokio::main(flavor = "current_thread")]
+#[monoio::main]
 async fn main() -> Result<()> {
+  let listener = monoio::net::TcpListener::bind("127.0.0.1:8080").unwrap();
   let acceptor = tls_acceptor()?;
-  let listener = TcpListener::bind("127.0.0.1:8080").await?;
-  println!("Server started, listening on {}", "127.0.0.1:8080");
+  println!("Server started, listening on 127.0.0.1:8080");
   loop {
     let (stream, _) = listener.accept().await?;
-    println!("Client connected");
+    let hyper_conn = HyperConnection(stream.into_poll_io()?);
+
     let acceptor = acceptor.clone();
-    tokio::spawn(async move {
-      let stream = acceptor.accept(stream).await.unwrap();
-      let conn_fut = Http::new()
-        .serve_connection(stream, service_fn(server_upgrade))
-        .with_upgrades();
-      if let Err(e) = conn_fut.await {
-        println!("An error occurred: {:?}", e);
+    println!("Client connected");
+    monoio::spawn(async move {
+      match acceptor.accept(hyper_conn).await {
+        Ok(stream) => {
+          let io = hyper_util::rt::TokioIo::new(stream);
+          let conn_fut = http1::Builder::new()
+            .serve_connection(io, service_fn(server_upgrade))
+            .with_upgrades();
+          if let Err(e) = conn_fut.await {
+            println!("An error occurred: {:?}", e);
+          }
+        }
+        Err(e) => {
+          println!("An error occurred: {:?}", e);
+        }
       }
     });
   }
 }
+
+use std::pin::Pin;
+struct HyperConnection(monoio::net::tcp::stream_poll::TcpStreamPoll);
+
+impl tokio::io::AsyncRead for HyperConnection {
+  #[inline]
+  fn poll_read(
+    mut self: Pin<&mut Self>,
+    cx: &mut std::task::Context<'_>,
+    buf: &mut tokio::io::ReadBuf<'_>,
+  ) -> std::task::Poll<std::io::Result<()>> {
+    Pin::new(&mut self.0).poll_read(cx, buf)
+  }
+}
+
+
+impl tokio::io::AsyncWrite for HyperConnection {
+  #[inline]
+  fn poll_write(
+    mut self: Pin<&mut Self>,
+    cx: &mut std::task::Context<'_>,
+    buf: &[u8],
+  ) -> std::task::Poll<Result<usize, std::io::Error>> {
+    Pin::new(&mut self.0).poll_write(cx, buf)
+  }
+
+  #[inline]
+  fn poll_flush(
+    mut self: Pin<&mut Self>,
+    cx: &mut std::task::Context<'_>,
+  ) -> std::task::Poll<Result<(), std::io::Error>> {
+    Pin::new(&mut self.0).poll_flush(cx)
+  }
+
+  #[inline]
+  fn poll_shutdown(
+    mut self: Pin<&mut Self>,
+    cx: &mut std::task::Context<'_>,
+  ) -> std::task::Poll<Result<(), std::io::Error>> {
+    Pin::new(&mut self.0).poll_shutdown(cx)
+  }
+}
+
+
+#[allow(clippy::non_send_fields_in_send_ty)]
+unsafe impl Send for HyperConnection {}
