@@ -14,6 +14,7 @@
 
 use tokio::io::AsyncWriteExt;
 
+use bytes::BytesMut;
 use core::ops::Deref;
 
 use crate::WebSocketError;
@@ -44,9 +45,10 @@ pub enum Payload<'a> {
   BorrowedMut(&'a mut [u8]),
   Borrowed(&'a [u8]),
   Owned(Vec<u8>),
+  Bytes(BytesMut),
 }
 
-impl<'a> core::fmt::Debug for Payload<'a> {
+impl core::fmt::Debug for Payload<'_> {
   fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
     f.debug_struct("Payload").field("len", &self.len()).finish()
   }
@@ -60,6 +62,7 @@ impl Deref for Payload<'_> {
       Payload::Borrowed(borrowed) => borrowed,
       Payload::BorrowedMut(borrowed_mut) => borrowed_mut,
       Payload::Owned(owned) => owned.as_ref(),
+      Payload::Bytes(b) => b.as_ref(),
     }
   }
 }
@@ -88,11 +91,13 @@ impl From<Payload<'_>> for Vec<u8> {
       Payload::Borrowed(borrowed) => borrowed.to_vec(),
       Payload::BorrowedMut(borrowed_mut) => borrowed_mut.to_vec(),
       Payload::Owned(owned) => owned,
+      Payload::Bytes(b) => Vec::from(b),
     }
   }
 }
 
 impl Payload<'_> {
+  #[inline(always)]
   pub fn to_mut(&mut self) -> &mut [u8] {
     match self {
       Payload::Borrowed(borrowed) => {
@@ -104,17 +109,18 @@ impl Payload<'_> {
       }
       Payload::BorrowedMut(borrowed) => borrowed,
       Payload::Owned(ref mut owned) => owned,
+      Payload::Bytes(b) => b.as_mut(),
     }
   }
 }
 
-impl<'a> PartialEq<&'_ [u8]> for Payload<'a> {
+impl PartialEq<&'_ [u8]> for Payload<'_> {
   fn eq(&self, other: &&'_ [u8]) -> bool {
     self.deref() == *other
   }
 }
 
-impl<'a, const N: usize> PartialEq<&'_ [u8; N]> for Payload<'a> {
+impl<const N: usize> PartialEq<&'_ [u8; N]> for Payload<'_> {
   fn eq(&self, other: &&'_ [u8; N]) -> bool {
     self.deref() == *other
   }
@@ -300,7 +306,7 @@ impl<'f> Frame<'f> {
       return Ok(());
     }
 
-    // Slighly more optimized than (unstable) write_all_vectored for 2 iovecs.
+    // Slightly more optimized than (unstable) write_all_vectored for 2 iovecs.
     while n <= size {
       b[0] = IoSlice::new(&head[n..size]);
       n += stream.write_vectored(&b).await?;

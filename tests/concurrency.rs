@@ -16,11 +16,14 @@ use anyhow::Result;
 use fastwebsockets::upgrade;
 use fastwebsockets::Frame;
 use fastwebsockets::OpCode;
-use hyper::server::conn::Http;
+use http_body_util::Empty;
+use hyper::body::Bytes;
+use hyper::body::Incoming;
+use hyper::server::conn::http1;
 use hyper::service::service_fn;
-use hyper::Body;
 use hyper::Request;
 use hyper::Response;
+use hyper_util::rt::TokioIo;
 use tokio::net::TcpListener;
 
 use fastwebsockets::handshake;
@@ -48,7 +51,9 @@ async fn handle_client(
   Ok(())
 }
 
-async fn server_upgrade(mut req: Request<Body>) -> Result<Response<Body>> {
+async fn server_upgrade(
+  mut req: Request<Incoming>,
+) -> Result<Response<Empty<Bytes>>> {
   let (response, fut) = upgrade::upgrade(&mut req)?;
 
   let client_id: usize = req
@@ -66,7 +71,7 @@ async fn server_upgrade(mut req: Request<Body>) -> Result<Response<Body>> {
   Ok(response)
 }
 
-async fn connect(client_id: usize) -> Result<WebSocket<Upgraded>> {
+async fn connect(client_id: usize) -> Result<WebSocket<TokioIo<Upgraded>>> {
   let stream = TcpStream::connect("localhost:8080").await?;
 
   let req = Request::builder()
@@ -81,7 +86,7 @@ async fn connect(client_id: usize) -> Result<WebSocket<Upgraded>> {
       fastwebsockets::handshake::generate_key(),
     )
     .header("Sec-WebSocket-Version", "13")
-    .body(Body::empty())?;
+    .body(Empty::<Bytes>::new())?;
 
   let (ws, _) = handshake::client(&SpawnExecutor, req, stream).await?;
   Ok(ws)
@@ -106,13 +111,14 @@ async fn start_client(client_id: usize) -> Result<()> {
 #[tokio::test(flavor = "multi_thread")]
 async fn test() -> Result<()> {
   let listener = TcpListener::bind("127.0.0.1:8080").await?;
-  println!("Server started, listening on {}", "127.0.0.1:8080");
+  println!("Server started, listening on 127.0.0.1:8080");
   tokio::spawn(async move {
     loop {
       let (stream, _) = listener.accept().await.unwrap();
       tokio::spawn(async move {
-        let conn_fut = Http::new()
-          .serve_connection(stream, service_fn(server_upgrade))
+        let io = TokioIo::new(stream);
+        let conn_fut = http1::Builder::new()
+          .serve_connection(io, service_fn(server_upgrade))
           .with_upgrades();
         conn_fut.await.unwrap();
       });

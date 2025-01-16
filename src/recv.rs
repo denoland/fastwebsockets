@@ -19,7 +19,7 @@ use std::cell::RefCell;
 const RECV_SIZE: usize = 524288;
 
 thread_local! {
-    static RECV_BUF: RefCell<SharedRecv> = RefCell::new(SharedRecv::null());
+    static RECV_BUF: RefCell<SharedRecv> = const { RefCell::new(SharedRecv::null()) };
 }
 
 pub(crate) fn init_once() -> &'static mut [u8] {

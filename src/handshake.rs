@@ -12,24 +12,26 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use hyper::body::Incoming;
 use hyper::upgrade::Upgraded;
 use hyper::Request;
 use hyper::Response;
 use hyper::StatusCode;
-use hyper::body::Incoming;
 
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 
+use hyper_util::rt::TokioIo;
 use tokio::io::AsyncRead;
 use tokio::io::AsyncWrite;
-use hyper_util::rt::TokioIo;
+
 use std::future::Future;
 use std::pin::Pin;
 
 use crate::Role;
 use crate::WebSocket;
 use crate::WebSocketError;
+
 /// Perform the client handshake.
 ///
 /// This function is used to perform the client handshake. It takes a hyper
@@ -40,12 +42,14 @@ use crate::WebSocketError;
 /// ```
 /// use fastwebsockets::handshake;
 /// use fastwebsockets::WebSocket;
-/// use hyper::{Request, Body, upgrade::Upgraded, header::{UPGRADE, CONNECTION}};
+/// use hyper::{Request, body::Bytes, upgrade::Upgraded, header::{UPGRADE, CONNECTION}};
+/// use hyper_util::rt::TokioIo;
+/// use http_body_util::Empty;
 /// use tokio::net::TcpStream;
 /// use std::future::Future;
 /// use anyhow::Result;
 ///
-/// async fn connect() -> Result<WebSocket<Upgraded>> {
+/// async fn connect() -> Result<WebSocket<TokioIo<Upgraded>>> {
 ///   let stream = TcpStream::connect("localhost:9001").await?;
 ///
 ///   let req = Request::builder()
@@ -59,7 +63,7 @@ use crate::WebSocketError;
 ///       fastwebsockets::handshake::generate_key(),
 ///     )
 ///     .header("Sec-WebSocket-Version", "13")
-///     .body(Body::empty())?;
+///     .body(Empty::<Bytes>::new())?;
 ///
 ///   let (ws, _) = handshake::client(&SpawnExecutor, req, stream).await?;
 ///   Ok(ws)
@@ -84,13 +88,14 @@ pub async fn client<S, E, B>(
   socket: S,
 ) -> Result<(WebSocket<TokioIo<Upgraded>>, Response<Incoming>), WebSocketError>
 where
-  B: hyper::body::Body + Send + 'static,
-  B::Data: Send,
-  B::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
   S: AsyncRead + AsyncWrite + Send + Unpin + 'static,
   E: hyper::rt::Executor<Pin<Box<dyn Future<Output = ()> + Send>>>,
+  B: hyper::body::Body + 'static + Send,
+  B::Data: Send,
+  B::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
 {
-  let (mut sender, conn) = hyper::client::conn::http1::handshake(TokioIo::new(socket)).await?;
+  let (mut sender, conn) =
+    hyper::client::conn::http1::handshake(TokioIo::new(socket)).await?;
   let fut = Box::pin(async move {
     if let Err(e) = conn.with_upgrades().await {
       eprintln!("Error polling connection: {}", e);
@@ -115,7 +120,7 @@ pub fn generate_key() -> String {
   // a base64-encoded (see Section 4 of [RFC4648]) value that,
   // when decoded, is 16 bytes in length (RFC 6455)
   let r: [u8; 16] = rand::random();
-  STANDARD.encode(&r)
+  STANDARD.encode(r)
 }
 
 // https://github.com/snapview/tungstenite-rs/blob/314feea3055a93e585882fb769854a912a7e6dae/src/handshake/client.rs#L189

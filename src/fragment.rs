@@ -12,15 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#[cfg(feature = "unstable-split")]
+use std::future::Future;
+
 use crate::error::WebSocketError;
 use crate::frame::Frame;
-use crate::recv::SharedRecv;
 use crate::OpCode;
 use crate::ReadHalf;
 use crate::WebSocket;
+#[cfg(feature = "unstable-split")]
+use crate::WebSocketRead;
 use crate::WriteHalf;
-use tokio::io::AsyncReadExt;
-use tokio::io::AsyncWriteExt;
+use tokio::io::AsyncRead;
+use tokio::io::AsyncWrite;
 
 pub enum Fragment {
   Text(Option<utf8::Incomplete>, Vec<u8>),
@@ -75,15 +79,13 @@ pub struct FragmentCollector<S> {
   read_half: ReadHalf,
   write_half: WriteHalf,
   fragments: Fragments,
-  // !Sync marker
-  _marker: std::marker::PhantomData<SharedRecv>,
 }
 
 impl<'f, S> FragmentCollector<S> {
   /// Creates a new `FragmentCollector` with the provided `WebSocket`.
   pub fn new(ws: WebSocket<S>) -> FragmentCollector<S>
   where
-    S: AsyncReadExt + AsyncWriteExt + Unpin,
+    S: AsyncRead + AsyncWrite + Unpin,
   {
     let (stream, read_half, write_half) = ws.into_parts_internal();
     FragmentCollector {
@@ -91,7 +93,6 @@ impl<'f, S> FragmentCollector<S> {
       read_half,
       write_half,
       fragments: Fragments::new(),
-      _marker: std::marker::PhantomData,
     }
   }
 
@@ -100,7 +101,7 @@ impl<'f, S> FragmentCollector<S> {
   /// Text frames payload is guaranteed to be valid UTF-8.
   pub async fn read_frame(&mut self) -> Result<Frame<'f>, WebSocketError>
   where
-    S: AsyncReadExt + AsyncWriteExt + Unpin,
+    S: AsyncRead + AsyncWrite + Unpin,
   {
     loop {
       let (res, obligated_send) =
@@ -129,10 +130,71 @@ impl<'f, S> FragmentCollector<S> {
     frame: Frame<'f>,
   ) -> Result<(), WebSocketError>
   where
-    S: AsyncReadExt + AsyncWriteExt + Unpin,
+    S: AsyncRead + AsyncWrite + Unpin,
   {
     self.write_half.write_frame(&mut self.stream, frame).await?;
     Ok(())
+  }
+
+  /// Consumes the `FragmentCollector` and returns the underlying stream.
+  #[inline]
+  pub fn into_inner(self) -> S {
+    self.stream
+  }
+}
+
+#[cfg(feature = "unstable-split")]
+pub struct FragmentCollectorRead<S> {
+  stream: S,
+  read_half: ReadHalf,
+  fragments: Fragments,
+}
+
+#[cfg(feature = "unstable-split")]
+impl<'f, S> FragmentCollectorRead<S> {
+  /// Creates a new `FragmentCollector` with the provided `WebSocket`.
+  pub fn new(ws: WebSocketRead<S>) -> FragmentCollectorRead<S>
+  where
+    S: AsyncRead + Unpin,
+  {
+    let (stream, read_half) = ws.into_parts_internal();
+    FragmentCollectorRead {
+      stream,
+      read_half,
+      fragments: Fragments::new(),
+    }
+  }
+
+  /// Reads a WebSocket frame, collecting fragmented messages until the final frame is received and returns the completed message.
+  ///
+  /// Text frames payload is guaranteed to be valid UTF-8.
+  ///
+  /// # Arguments
+  ///
+  /// * `send_fn`: Closure must ensure frames are sent by write side of split WebSocket to correctly implement auto-close and auto-pong.
+  pub async fn read_frame<R, E>(
+    &mut self,
+    send_fn: &mut impl FnMut(Frame<'f>) -> R,
+  ) -> Result<Frame<'f>, WebSocketError>
+  where
+    S: AsyncRead + Unpin,
+    E: Into<Box<dyn std::error::Error + Send + Sync + 'static>>,
+    R: Future<Output = Result<(), E>>,
+  {
+    loop {
+      let (res, obligated_send) =
+        self.read_half.read_frame_inner(&mut self.stream).await;
+      if let Some(frame) = obligated_send {
+        let res = send_fn(frame).await;
+        res.map_err(|e| WebSocketError::SendError(e.into()))?;
+      }
+      let Some(frame) = res? else {
+        continue;
+      };
+      if let Some(frame) = self.fragments.accumulate(frame)? {
+        return Ok(frame);
+      }
+    }
   }
 }
 

@@ -70,41 +70,6 @@ impl IncomingUpgrade {
   }
 }
 
-#[cfg(feature = "with_axum")]
-impl<S> axum_core::extract::FromRequestParts<S> for IncomingUpgrade
-where
-  S: Send + Sync,
-{
-  type Rejection = hyper::StatusCode;
-
-  async fn from_request_parts(
-    parts: &mut http::request::Parts,
-    _state: &S,
-  ) -> Result<Self, Self::Rejection> {
-    let key = parts
-      .headers
-      .get("Sec-WebSocket-Key")
-      .ok_or(hyper::StatusCode::BAD_REQUEST)?;
-    if parts
-      .headers
-      .get("Sec-WebSocket-Version")
-      .map(|v| v.as_bytes())
-      != Some(b"13")
-    {
-      return Err(hyper::StatusCode::BAD_REQUEST);
-    }
-
-    let on_upgrade = parts
-      .extensions
-      .remove::<hyper::upgrade::OnUpgrade>()
-      .ok_or(hyper::StatusCode::BAD_REQUEST)?;
-    Ok(Self {
-      on_upgrade,
-      key: sec_websocket_protocol(key.as_bytes()),
-    })
-  }
-}
-
 /// A future that resolves to a websocket stream when the associated HTTP upgrade completes.
 #[pin_project]
 #[derive(Debug)]
