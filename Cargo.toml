@@ -35,7 +35,7 @@ required-features = ["upgrade", "with_axum"]
 [[example]]
 name = "echo_server_split"
 path = "examples/echo_server_split.rs"
-required-features = ["upgrade"]
+required-features = ["upgrade", "unstable-split"]
 
 [dependencies]
 tokio = { version = "1.25.0", default-features = false, features = ["io-util"] }
@@ -97,7 +97,7 @@ required-features = ["upgrade"]
 [[test]]
 name = "split"
 path = "tests/split.rs"
-required-features = ["upgrade"]
+required-features = ["upgrade", "unstable-split"]
 
 [[test]]
 name = "concurrency"
