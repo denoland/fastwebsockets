@@ -552,17 +552,20 @@ impl<'f, S> WebSocket<S> {
   where
     S: AsyncRead + AsyncWrite + Unpin,
   {
+    eprintln!("read_frame call");
     loop {
       let (res, obligated_send) =
         self.read_half.read_frame_inner(&mut self.stream).await;
       let is_closed = self.write_half.closed;
       if let Some(frame) = obligated_send {
         if !is_closed {
+          eprintln!("writing obligated send");
           self.write_half.write_frame(&mut self.stream, frame).await?;
         }
       }
       if let Some(frame) = res? {
         if is_closed && frame.opcode != OpCode::Close {
+          eprintln!("return connection closed");
           return Err(WebSocketError::ConnectionClosed);
         }
         break Ok(frame);
@@ -601,6 +604,7 @@ impl ReadHalf {
   where
     S: AsyncRead + Unpin,
   {
+    eprintln!("read_frame_inner call");
     let mut frame = match self.parse_frame_header(stream).await {
       Ok(frame) => frame,
       Err(e) => return (Err(e), None),
@@ -610,8 +614,10 @@ impl ReadHalf {
       frame.unmask()
     };
 
+    eprintln!("here 1");
     match frame.opcode {
       OpCode::Close if self.auto_close => {
+        eprintln!("here 2");
         match frame.payload.len() {
           0 => {}
           1 => return (Err(WebSocketError::InvalidCloseFrame), None),
@@ -643,9 +649,11 @@ impl ReadHalf {
         (Ok(Some(frame)), Some(obligated_send))
       }
       OpCode::Ping if self.auto_pong => {
+        eprintln!("here 3");
         (Ok(None), Some(Frame::pong(frame.payload)))
       }
       OpCode::Text => {
+        eprintln!("here 4");
         if frame.fin && !frame.is_utf8() {
           (Err(WebSocketError::InvalidUTF8), None)
         } else {
@@ -663,6 +671,7 @@ impl ReadHalf {
   where
     S: AsyncRead + Unpin,
   {
+    eprintln!("parse_frame_header call");
     macro_rules! eof {
       ($n:expr) => {{
         if $n == 0 {
@@ -770,21 +779,31 @@ impl WriteHalf {
   where
     S: AsyncWrite + Unpin,
   {
+    eprintln!("write_frame");
     if self.role == Role::Client && self.auto_apply_mask {
       frame.mask();
     }
 
     if frame.opcode == OpCode::Close {
+      eprintln!("close opcode, setting self.closed");
       self.closed = true;
     } else if self.closed {
+      eprintln!("already closed, throw");
       return Err(WebSocketError::ConnectionClosed);
     }
 
     if self.vectored && frame.payload.len() > self.writev_threshold {
+      eprintln!("writev");
       frame.writev(stream).await?;
     } else {
+      eprintln!("write_all text");
       let text = frame.write(&mut self.write_buffer);
       stream.write_all(text).await?;
+    }
+
+    if frame.opcode == OpCode::Close {
+      eprintln!("shutdown!");
+      stream.shutdown().await?;
     }
 
     Ok(())
