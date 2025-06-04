@@ -100,32 +100,62 @@ fn unmask_easy(payload: &mut [u8], mask: [u8; 4]) {
 // https://github.com/snapview/tungstenite-rs/blob/e5efe537b87a6705467043fe44bb220ddf7c1ce8/src/protocol/frame/mask.rs#L23
 //
 // https://godbolt.org/z/EPTYo5jK8
-#[inline]
-fn unmask_fallback(buf: &mut [u8], mask: [u8; 4]) {
-  let mask_u32 = u32::from_ne_bytes(mask);
-
-  let (prefix, words, suffix) = unsafe { buf.align_to_mut::<u32>() };
-  unmask_easy(prefix, mask);
-  let head = prefix.len() & 3;
-  let mask_u32 = if head > 0 {
-    if cfg!(target_endian = "big") {
-      mask_u32.rotate_left(8 * head as u32)
-    } else {
-      mask_u32.rotate_right(8 * head as u32)
-    }
+/// Unmask a payload using the given 4-byte mask.
+#[inline(always)]
+pub fn unmask(payload: &mut [u8], mask: [u8; 4]) {
+  if payload.len() < 32 {
+    unmask_small(payload, mask);
   } else {
-    mask_u32
-  };
-  for word in words.iter_mut() {
-    *word ^= mask_u32;
+    unmask_large(payload, mask);
   }
-  unmask_easy(suffix, mask_u32.to_ne_bytes());
 }
 
-/// Unmask a payload using the given 4-byte mask.
+#[inline(always)]
+fn unmask_small(payload: &mut [u8], mask: [u8; 4]) {
+  // Unroll loop for small payloads
+  let mut i = 0;
+  while i + 4 <= payload.len() {
+    payload[i] ^= mask[0];
+    payload[i + 1] ^= mask[1];
+    payload[i + 2] ^= mask[2];
+    payload[i + 3] ^= mask[3];
+    i += 4;
+  }
+
+  // Handle remainder
+  while i < payload.len() {
+    payload[i] ^= mask[i & 3];
+    i += 1;
+  }
+}
+
 #[inline]
-pub fn unmask(payload: &mut [u8], mask: [u8; 4]) {
-  unmask_fallback(payload, mask)
+fn unmask_large(buf: &mut [u8], mask: [u8; 4]) {
+  let mask_u32 = u32::from_ne_bytes(mask);
+  let mask_u64 = ((mask_u32 as u64) << 32) | (mask_u32 as u64);
+
+  // Try to align to 8-byte boundaries for better performance
+  let (prefix, middle, suffix) = unsafe { buf.align_to_mut::<u64>() };
+
+  unmask_small(prefix, mask);
+  let head = prefix.len() & 7;
+
+  let mask_u64 = if head > 0 {
+    if cfg!(target_endian = "big") {
+      mask_u64.rotate_left(8 * head as u32)
+    } else {
+      mask_u64.rotate_right(8 * head as u32)
+    }
+  } else {
+    mask_u64
+  };
+
+  // Process 8 bytes at a time
+  for word in middle.iter_mut() {
+    *word ^= mask_u64;
+  }
+
+  unmask_small(suffix, mask_u64.to_ne_bytes()[..4].try_into().unwrap());
 }
 
 #[cfg(test)]
