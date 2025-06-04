@@ -73,6 +73,8 @@ upgrade = [
 unstable-split = []
 # Axum integration
 with_axum = ["axum-core", "http", "async-trait"]
+fast = ["simd"]       # Enable SIMD optimizations
+simd = ["simdutf8"]
 
 [dev-dependencies]
 tokio = { version = "1.25.0", features = ["full", "macros"] }
@@ -115,8 +117,10 @@ debug = true
 
 [profile.release]
 opt-level = 3
-lto = true
+lto = "fat"           # More aggressive LTO
 codegen-units = 1
+panic = "abort"       # Smaller binary, faster execution
+overflow-checks = false # Disable overflow checks in release
 
 [package.metadata.docs.rs]
 features = ["upgrade", "with_axum"]
