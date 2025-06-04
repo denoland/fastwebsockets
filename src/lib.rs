@@ -762,7 +762,7 @@ impl WriteHalf {
   }
 
   /// Writes a frame to the provided stream.
- pub async fn write_frame<'a, S>(
+  pub async fn write_frame<'a, S>(
     &'a mut self,
     stream: &mut S,
     mut frame: Frame<'a>,
@@ -782,19 +782,21 @@ impl WriteHalf {
 
     // Always write to a single buffer to avoid fragmentation
     let total_len = frame.payload.len() + 16; // MAX_HEAD_SIZE from frame.rs
-    
+
     // Reuse the write buffer to avoid allocations
     if self.write_buffer.capacity() < total_len {
-      self.write_buffer.reserve(total_len - self.write_buffer.capacity());
+      self
+        .write_buffer
+        .reserve(total_len - self.write_buffer.capacity());
     }
     self.write_buffer.clear();
 
     // Write header directly to buffer
     frame.fmt_head_to_buffer(&mut self.write_buffer);
-    
+
     // Write payload directly after header
     self.write_buffer.extend_from_slice(&frame.payload);
-    
+
     // Single write call
     stream.write_all(&self.write_buffer).await?;
 

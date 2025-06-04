@@ -121,7 +121,7 @@ fn unmask_small(payload: &mut [u8], mask: [u8; 4]) {
     payload[i + 3] ^= mask[3];
     i += 4;
   }
-  
+
   // Handle remainder
   while i < payload.len() {
     payload[i] ^= mask[i & 3];
@@ -136,10 +136,10 @@ fn unmask_large(buf: &mut [u8], mask: [u8; 4]) {
 
   // Try to align to 8-byte boundaries for better performance
   let (prefix, middle, suffix) = unsafe { buf.align_to_mut::<u64>() };
-  
+
   unmask_small(prefix, mask);
   let head = prefix.len() & 7;
-  
+
   let mask_u64 = if head > 0 {
     if cfg!(target_endian = "big") {
       mask_u64.rotate_left(8 * head as u32)
@@ -149,12 +149,12 @@ fn unmask_large(buf: &mut [u8], mask: [u8; 4]) {
   } else {
     mask_u64
   };
-  
+
   // Process 8 bytes at a time
   for word in middle.iter_mut() {
     *word ^= mask_u64;
   }
-  
+
   unmask_small(suffix, mask_u64.to_ne_bytes()[..4].try_into().unwrap());
 }
 

@@ -335,19 +335,19 @@ impl<'f> Frame<'f> {
     &buf[..size + len]
   }
 
-   /// Optimized version that writes header directly to buffer
+  /// Optimized version that writes header directly to buffer
   pub fn fmt_head_to_buffer(&mut self, buf: &mut Vec<u8>) {
     let start_len = buf.len();
-    
+
     // Ensure we have space for the maximum possible header
     buf.reserve(16); // MAX_HEAD_SIZE from frame.rs
-    
+
     // Write first byte
     buf.push((self.fin as u8) << 7 | (self.opcode as u8));
 
     let len = self.payload.len();
     let mask_flag = if self.mask.is_some() { 0x80 } else { 0 };
-    
+
     if len < 126 {
       buf.push(len as u8 | mask_flag);
     } else if len < 65536 {
