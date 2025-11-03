@@ -54,6 +54,7 @@ utf-8 = "0.7.5"
 rand = "0.8.4"
 thiserror = "1.0.40"
 bytes = "1.5.0"
+miniz_oxide = "0.8.9"
 
 # Axum integration
 axum-core = { version = "0.5.0", optional = true }

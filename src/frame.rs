@@ -14,10 +14,15 @@
 
 use tokio::io::AsyncWriteExt;
 
+use miniz_oxide::{MZFlush, MZStatus};
+use miniz_oxide::inflate::stream::{InflateState, inflate};
+
 use bytes::BytesMut;
 use core::ops::Deref;
 
 use crate::WebSocketError;
+
+const TRAILER: [u8; 4] = [0x00, 0x00, 0xff, 0xff];
 
 macro_rules! repr_u8 {
     ($(#[$meta:meta])* $vis:vis enum $name:ident {
@@ -136,6 +141,8 @@ pub struct Frame<'f> {
   mask: Option<[u8; 4]>,
   /// The payload of the frame.
   pub payload: Payload<'f>,
+  /// Is the frame payload compressed
+  pub compressed: bool,
 }
 
 const MAX_HEAD_SIZE: usize = 16;
@@ -147,12 +154,14 @@ impl<'f> Frame<'f> {
     opcode: OpCode,
     mask: Option<[u8; 4]>,
     payload: Payload<'f>,
+    compressed: bool,
   ) -> Self {
     Self {
       fin,
       opcode,
       mask,
       payload,
+      compressed,
     }
   }
 
@@ -167,6 +176,7 @@ impl<'f> Frame<'f> {
       opcode: OpCode::Text,
       mask: None,
       payload,
+      compressed: false,
     }
   }
 
@@ -179,6 +189,7 @@ impl<'f> Frame<'f> {
       opcode: OpCode::Binary,
       mask: None,
       payload,
+      compressed: false,
     }
   }
 
@@ -197,6 +208,7 @@ impl<'f> Frame<'f> {
       opcode: OpCode::Close,
       mask: None,
       payload: payload.into(),
+      compressed: false,
     }
   }
 
@@ -211,6 +223,7 @@ impl<'f> Frame<'f> {
       opcode: OpCode::Close,
       mask: None,
       payload,
+      compressed: false,
     }
   }
 
@@ -223,6 +236,7 @@ impl<'f> Frame<'f> {
       opcode: OpCode::Pong,
       mask: None,
       payload,
+      compressed: false,
     }
   }
 
@@ -334,6 +348,33 @@ impl<'f> Frame<'f> {
     buf[size..size + len].copy_from_slice(&self.payload);
     &buf[..size + len]
   }
+
+  pub fn inflate(&self, state: &mut InflateState) -> Result<Self, WebSocketError>
+  {
+      let payload = [self.payload.to_vec().as_slice(), &TRAILER].concat();
+
+      let max_output_size = usize::max_value();
+      let mut out: Vec<u8> = vec![0; payload.len().saturating_mul(2).min(max_output_size)];
+
+      let res = inflate(state, &payload, &mut out, MZFlush::None);
+
+      if res.status != Ok(MZStatus::Ok) {
+        return Err(WebSocketError::InvalidEncoding);
+      }
+
+      out.truncate(res.bytes_written);
+
+      let payload = Payload::Owned(out);
+
+      Ok(Self {
+        fin: self.fin,
+        opcode: self.opcode,
+        mask: self.mask,
+        payload,
+        compressed: false
+      })
+  }
+
 }
 
 repr_u8! {

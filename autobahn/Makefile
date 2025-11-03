@@ -1,7 +1,7 @@
 AUTOBAHN_TESTSUITE_DOCKER := crossbario/autobahn-testsuite:0.8.2@sha256:5d4ba3aa7d6ab2fdbf6606f3f4ecbe4b66f205ce1cbc176d6cdf650157e52242
 
 build-server:
-	sudo cargo build --release --example echo_server --features "upgrade"
+	cargo build --release --example echo_server --features "upgrade"
 
 run-server: build-server
 	echo ${PWD}
@@ -18,7 +18,7 @@ run-server: build-server
 	../target/release/examples/echo_server
 
 build-client:
-	sudo cargo build --release --example autobahn_client --features "upgrade"
+	cargo build --release --example autobahn_client --features "upgrade"
 
 run-client: build-client
 	echo ${PWD}

@@ -175,6 +175,9 @@ use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWrite;
 use tokio::io::AsyncWriteExt;
 
+use miniz_oxide::DataFormat;
+use miniz_oxide::inflate::stream::InflateState;
+
 pub use crate::close::CloseCode;
 pub use crate::error::WebSocketError;
 pub use crate::fragment::FragmentCollector;
@@ -208,6 +211,8 @@ pub(crate) struct ReadHalf {
   writev_threshold: usize,
   max_message_size: usize,
   buffer: BytesMut,
+
+  state: InflateState,
 }
 
 #[cfg(feature = "unstable-split")]
@@ -364,6 +369,7 @@ pub struct WebSocket<S> {
   stream: S,
   write_half: WriteHalf,
   read_half: ReadHalf,
+
 }
 
 impl<'f, S> WebSocket<S> {
@@ -577,6 +583,8 @@ impl ReadHalf {
   pub fn after_handshake(role: Role) -> Self {
     let buffer = BytesMut::with_capacity(8192);
 
+    let state = InflateState::new(DataFormat::Raw);
+
     Self {
       role,
       auto_apply_mask: true,
@@ -585,6 +593,7 @@ impl ReadHalf {
       writev_threshold: 1024,
       max_message_size: 64 << 20,
       buffer,
+      state,
     }
   }
 
@@ -609,6 +618,13 @@ impl ReadHalf {
     if self.role == Role::Server && self.auto_apply_mask {
       frame.unmask()
     };
+
+    if frame.compressed {
+        frame = match frame.inflate(&mut self.state) {
+            Ok(frame) => frame,
+            Err(e) => return (Err(e), None),
+        }
+    }
 
     match frame.opcode {
       OpCode::Close if self.auto_close => {
@@ -681,7 +697,11 @@ impl ReadHalf {
     let rsv2 = self.buffer[0] & 0b00100000 != 0;
     let rsv3 = self.buffer[0] & 0b00010000 != 0;
 
-    if rsv1 || rsv2 || rsv3 {
+    let mut compressed = false;
+
+    if rsv1 && !rsv2 && !rsv3 {
+      compressed = true;
+    } else if rsv1 || rsv2 || rsv3 {
       return Err(WebSocketError::ReservedBitsNotZero);
     }
 
@@ -744,7 +764,7 @@ impl ReadHalf {
 
     // if we read too much it will stay in the buffer, for the next call to this method
     let payload = self.buffer.split_to(payload_len);
-    let frame = Frame::new(fin, opcode, mask, Payload::Bytes(payload));
+    let frame = Frame::new(fin, opcode, mask, Payload::Bytes(payload), compressed);
     Ok(frame)
   }
 }
