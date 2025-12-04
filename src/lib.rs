@@ -774,10 +774,15 @@ impl WriteHalf {
       frame.mask();
     }
 
-    if frame.opcode == OpCode::Close {
-      self.closed = true;
-    } else if self.closed {
+    if self.closed {
+      if frame.opcode == OpCode::Close {
+        return Ok(()); // Already sent close, this is a no-op
+      }
       return Err(WebSocketError::ConnectionClosed);
+    }
+    let is_close = frame.opcode == OpCode::Close;
+    if is_close {
+      self.closed = true;
     }
 
     if self.vectored && frame.payload.len() > self.writev_threshold {
@@ -785,6 +790,11 @@ impl WriteHalf {
     } else {
       let text = frame.write(&mut self.write_buffer);
       stream.write_all(text).await?;
+    }
+
+    // Shutdown TCP write-half after sending Close frame per RFC 6455
+    if is_close {
+      stream.shutdown().await?;
     }
 
     Ok(())
