@@ -792,11 +792,6 @@ impl WriteHalf {
       stream.write_all(text).await?;
     }
 
-    // Shutdown TCP write-half after sending Close frame per RFC 6455
-    if is_close {
-      stream.shutdown().await?;
-    }
-
     Ok(())
   }
 }
