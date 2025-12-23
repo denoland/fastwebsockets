@@ -588,7 +588,7 @@ impl ReadHalf {
     }
   }
 
-  /// Attempt to read a single frame from from the incoming stream, returning any send obligations if
+  /// Attempt to read a single frame from the incoming stream, returning any send obligations if
   /// `auto_close` or `auto_pong` are enabled. Callers to this function are obligated to send the
   /// frame in the latter half of the tuple if one is specified, unless the write half of this socket
   /// has been closed.
