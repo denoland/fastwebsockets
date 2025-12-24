@@ -34,6 +34,8 @@ pub enum WebSocketError {
   InvalidSecWebsocketVersion,
   #[error("Invalid value")]
   InvalidValue,
+  #[error("Invalid encoding")]
+  InvalidEncoding,
   #[error("Sec-WebSocket-Key header is missing")]
   MissingSecWebSocketKey,
   #[error(transparent)]

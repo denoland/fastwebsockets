@@ -222,7 +222,7 @@ impl Fragments {
           if self.fragments.is_some() {
             return Err(WebSocketError::InvalidFragment);
           }
-          return Ok(Some(Frame::new(true, frame.opcode, None, frame.payload)));
+          return Ok(Some(Frame::new(true, frame.opcode, None, frame.payload, frame.compressed)));
         } else {
           self.fragments = match frame.opcode {
             OpCode::Text => match utf8::decode(&frame.payload) {
@@ -292,6 +292,7 @@ impl Fragments {
               self.opcode,
               None,
               self.fragments.take().unwrap().take_buffer().into(),
+              false,
             )));
           }
         }
@@ -303,6 +304,7 @@ impl Fragments {
               self.opcode,
               None,
               self.fragments.take().unwrap().take_buffer().into(),
+              false,
             )));
           }
         }
