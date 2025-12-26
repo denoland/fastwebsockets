@@ -1,4 +1,4 @@
-AUTOBAHN_TESTSUITE_DOCKER := crossbario/autobahn-testsuite:0.8.2@sha256:5d4ba3aa7d6ab2fdbf6606f3f4ecbe4b66f205ce1cbc176d6cdf650157e52242
+AUTOBAHN_TESTSUITE_DOCKER := crossbario/autobahn-testsuite:latest@sha256:519915fb568b04c9383f70a1c405ae3ff44ab9e35835b085239c258b6fac3074
 
 build-server:
 	sudo cargo build --release --example echo_server --features "upgrade"
