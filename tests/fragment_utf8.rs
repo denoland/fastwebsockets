@@ -138,7 +138,7 @@ async fn test_invalid_unfragmented_utf8() {
     assert!(result.is_err());
     match result {
       Err(fastwebsockets::WebSocketError::InvalidUTF8) => {}
-      other => panic!("Expected InvalidUTF8 error, got {:?}", other),
+      _ => panic!("Expected InvalidUTF8 error"),
     }
   });
 
@@ -147,8 +147,8 @@ async fn test_invalid_unfragmented_utf8() {
     // Send invalid UTF-8: κόσμε���edited (from Autobahn test 6.3.1)
     // Hex: cebae1bdb9cf83cebcceb5eda080656469746564
     let invalid_utf8 = vec![
-      0xce, 0xba, 0xe1, 0xbd, 0xb9, 0xcf, 0x83, 0xce, 0xbc, 0xce, 0xb5, 0xed, 0xa0, 0x80, 0x65,
-      0x64, 0x69, 0x74, 0x65, 0x64,
+      0xce, 0xba, 0xe1, 0xbd, 0xb9, 0xcf, 0x83, 0xce, 0xbc, 0xce, 0xb5, 0xed,
+      0xa0, 0x80, 0x65, 0x64, 0x69, 0x74, 0x65, 0x64,
     ];
     let frame = create_raw_frame(true, OpCode::Text, &invalid_utf8);
     stream.write_all(&frame).await.unwrap();
