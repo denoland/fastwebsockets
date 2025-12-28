@@ -703,14 +703,10 @@ impl ReadHalf {
     let payload_len: usize = match extra {
       0 => usize::from(length_code),
       2 => self.buffer.get_u16() as usize,
-      #[cfg(any(target_pointer_width = "64", target_pointer_width = "128"))]
+      #[cfg(target_pointer_width = "64")]
       8 => self.buffer.get_u64() as usize,
       // On 32bit systems, usize is only 4bytes wide so we must check for usize overflowing
-      #[cfg(any(
-        target_pointer_width = "8",
-        target_pointer_width = "16",
-        target_pointer_width = "32"
-      ))]
+      #[cfg(any(target_pointer_width = "16", target_pointer_width = "32"))]
       8 => match usize::try_from(self.buffer.get_u64()) {
         Ok(length) => length,
         Err(_) => return Err(WebSocketError::FrameTooLarge),
