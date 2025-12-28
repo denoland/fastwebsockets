@@ -61,7 +61,7 @@ http = { version = "1", optional = true }
 async-trait = { version = "0.1", optional = true }
 
 [features]
-default = []
+default = ["simd"]
 upgrade = [
     "hyper",
     "pin-project",
