@@ -226,6 +226,18 @@ impl<'f> Frame<'f> {
     }
   }
 
+  /// Create a new WebSocket ping `Frame`.
+  ///
+  /// This is a convenience method for `Frame::new(true, OpCode::Ping, None, payload)`.
+  pub fn ping(payload: Payload<'f>) -> Self {
+    Self {
+      fin: true,
+      opcode: OpCode::Ping,
+      mask: None,
+      payload,
+    }
+  }
+
   /// Checks if the frame payload is valid UTF-8.
   pub fn is_utf8(&self) -> bool {
     #[cfg(feature = "simd")]
