@@ -770,10 +770,15 @@ impl WriteHalf {
       frame.mask();
     }
 
-    if frame.opcode == OpCode::Close {
-      self.closed = true;
-    } else if self.closed {
+    if self.closed {
+      if frame.opcode == OpCode::Close {
+        return Ok(()); // Already sent close, this is a no-op
+      }
       return Err(WebSocketError::ConnectionClosed);
+    }
+    let is_close = frame.opcode == OpCode::Close;
+    if is_close {
+      self.closed = true;
     }
 
     if self.vectored && frame.payload.len() > self.writev_threshold {
