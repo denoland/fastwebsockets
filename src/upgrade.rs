@@ -4,7 +4,7 @@
 // Copyright 2021, Maarten de Vries maarten@de-vri.es
 // BSD 2-Clause "Simplified" License
 //
-// Copyright 2023 Divy Srivastava <dj.srivastava23@gmail.com>
+// Copyright 2023-2026 Divy Srivastava <dj.srivastava23@gmail.com>
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
