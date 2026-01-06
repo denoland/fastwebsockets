@@ -222,6 +222,18 @@ impl Fragments {
           if self.fragments.is_some() {
             return Err(WebSocketError::InvalidFragment);
           }
+          // Validate UTF-8 for unfragmented text messages
+          if frame.opcode == OpCode::Text {
+            match utf8::decode(&frame.payload) {
+              Ok(_) => {}
+              Err(utf8::DecodeError::Incomplete { .. }) => {
+                return Err(WebSocketError::InvalidUTF8);
+              }
+              Err(utf8::DecodeError::Invalid { .. }) => {
+                return Err(WebSocketError::InvalidUTF8);
+              }
+            }
+          }
           return Ok(Some(Frame::new(true, frame.opcode, None, frame.payload)));
         } else {
           self.fragments = match frame.opcode {
