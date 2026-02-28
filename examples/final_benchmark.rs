@@ -53,7 +53,7 @@ async fn connection_benchmark(backend: &str) -> Result<(), Box<dyn std::error::E
         println!("⚡ io_uring connect time: {:?}", connect_time);
         
         // Test native operations
-        let native_stream = stream.into_inner();
+        let native_stream = stream.into_inner().unwrap();
         
         let io_start = Instant::now();
         let message = b"Hello from io_uring client!";

@@ -7,80 +7,204 @@ pub mod net {
     use std::io;
     use std::net::SocketAddr;
     use std::pin::Pin;
-    use std::task::{Context, Poll};
-    use std::future::Future;
-    use std::sync::Arc;
-    use std::cell::RefCell;
+    use std::task::{Context, Poll, Waker};
+    use std::sync::{Arc, Mutex};
+    use std::collections::VecDeque;
     
     use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
+    /// Pending read operation
+    struct PendingRead {
+        waker: Waker,
+        buf_size: usize,
+        result: Option<io::Result<Vec<u8>>>,
+    }
+
+    /// Pending write operation  
+    struct PendingWrite {
+        waker: Waker,
+        data: Vec<u8>,
+        result: Option<io::Result<usize>>,
+    }
+
+    /// State for managing async operations
+    struct StreamState {
+        pending_reads: VecDeque<PendingRead>,
+        pending_writes: VecDeque<PendingWrite>,
+    }
+
     /// Wrapper around tokio_uring::net::TcpStream that implements AsyncRead/AsyncWrite
     /// 
-    /// This adapter works around the ownership issues by using interior mutability
-    /// and careful state management for io_uring operations.
+    /// Uses a task-based adapter to bridge io_uring's ownership model with AsyncRead/AsyncWrite.
     pub struct TcpStream {
-        inner: Arc<RefCell<tokio_uring::net::TcpStream>>,
+        inner: Arc<tokio::sync::Mutex<tokio_uring::net::TcpStream>>,
+        state: Arc<Mutex<StreamState>>,
     }
 
     impl TcpStream {
         pub async fn connect(addr: SocketAddr) -> io::Result<Self> {
             let inner = tokio_uring::net::TcpStream::connect(addr).await?;
             Ok(Self { 
-                inner: Arc::new(RefCell::new(inner)),
+                inner: Arc::new(tokio::sync::Mutex::new(inner)),
+                state: Arc::new(Mutex::new(StreamState {
+                    pending_reads: VecDeque::new(),
+                    pending_writes: VecDeque::new(),
+                })),
             })
         }
 
         pub fn from_std(socket: std::net::TcpStream) -> Self {
             let inner = tokio_uring::net::TcpStream::from_std(socket);
             Self { 
-                inner: Arc::new(RefCell::new(inner)),
+                inner: Arc::new(tokio::sync::Mutex::new(inner)),
+                state: Arc::new(Mutex::new(StreamState {
+                    pending_reads: VecDeque::new(),
+                    pending_writes: VecDeque::new(),
+                })),
             }
         }
         
-        /// Direct access to perform io_uring operations
-        pub fn with_inner<F, R>(&self, f: F) -> R 
-        where 
-            F: FnOnce(&tokio_uring::net::TcpStream) -> R
-        {
-            f(&*self.inner.borrow())
-        }
-        
         /// Convert back to the underlying io_uring stream
-        pub fn into_inner(self) -> tokio_uring::net::TcpStream {
-            Arc::try_unwrap(self.inner).map_err(|_| "Could not unwrap Arc").unwrap().into_inner()
+        /// Note: This consumes the wrapper and extracts the inner stream
+        pub fn into_inner(self) -> Result<tokio_uring::net::TcpStream, &'static str> {
+            Arc::try_unwrap(self.inner)
+                .map_err(|_| "Stream still in use")
+                .map(|mutex| mutex.into_inner())
         }
     }
 
     impl AsyncRead for TcpStream {
         fn poll_read(
             self: Pin<&mut Self>,
-            _cx: &mut Context<'_>,
-            _buf: &mut ReadBuf<'_>,
+            cx: &mut Context<'_>,
+            buf: &mut ReadBuf<'_>,
         ) -> Poll<io::Result<()>> {
-            // For now, implement a simple version that will work
-            // This is not optimal but provides basic functionality
+            let remaining = buf.remaining();
+            if remaining == 0 {
+                return Poll::Ready(Ok(()));
+            }
+
+            let mut state = self.state.lock().unwrap();
             
-            // We can't easily poll io_uring operations in the traditional sense
-            // because they require ownership. For now, return an error to indicate
-            // this needs to use the native io_uring API directly.
+            // Check if we have a completed read
+            if let Some(mut pending) = state.pending_reads.pop_front() {
+                if let Some(result) = pending.result.take() {
+                    match result {
+                        Ok(data) => {
+                            let to_copy = data.len().min(remaining);
+                            buf.put_slice(&data[..to_copy]);
+                            return Poll::Ready(Ok(()));
+                        }
+                        Err(e) => return Poll::Ready(Err(e)),
+                    }
+                } else {
+                    // Still pending, put it back and return pending
+                    pending.waker = cx.waker().clone();
+                    state.pending_reads.push_front(pending);
+                    return Poll::Pending;
+                }
+            }
+
+            // Start a new read operation
+            let stream = self.inner.clone();
+            let state_clone = self.state.clone();
+            let waker = cx.waker().clone();
             
-            Poll::Ready(Err(io::Error::new(
-                io::ErrorKind::Other, 
-                "Use native io_uring operations for optimal performance"
-            )))
+            let pending = PendingRead {
+                waker: waker.clone(),
+                buf_size: remaining,
+                result: None,
+            };
+            state.pending_reads.push_back(pending);
+            drop(state);
+
+            // Spawn the read operation
+            tokio_uring::spawn(async move {
+                let mut guard = stream.lock().await;
+                let read_buf = vec![0u8; remaining];
+                let (result, returned_buf) = guard.read(read_buf).await;
+                
+                let final_result = match result {
+                    Ok(n) => {
+                        if n == 0 {
+                            Ok(vec![])  // EOF
+                        } else {
+                            Ok(returned_buf[..n].to_vec())
+                        }
+                    }
+                    Err(e) => Err(e),
+                };
+
+                // Store result and wake
+                let mut state = state_clone.lock().unwrap();
+                if let Some(pending) = state.pending_reads.back_mut() {
+                    pending.result = Some(final_result);
+                    pending.waker.wake_by_ref();
+                }
+            });
+
+            Poll::Pending
         }
     }
 
     impl AsyncWrite for TcpStream {
         fn poll_write(
             self: Pin<&mut Self>,
-            _cx: &mut Context<'_>,
-            _buf: &[u8],
+            cx: &mut Context<'_>,
+            buf: &[u8],
         ) -> Poll<Result<usize, io::Error>> {
-            Poll::Ready(Err(io::Error::new(
-                io::ErrorKind::Other,
-                "Use native io_uring operations for optimal performance"
-            )))
+            if buf.is_empty() {
+                return Poll::Ready(Ok(0));
+            }
+
+            let mut state = self.state.lock().unwrap();
+            
+            // Check if we have a completed write
+            if let Some(mut pending) = state.pending_writes.pop_front() {
+                if let Some(result) = pending.result.take() {
+                    return Poll::Ready(result);
+                } else {
+                    // Still pending, put it back
+                    pending.waker = cx.waker().clone();
+                    state.pending_writes.push_front(pending);
+                    return Poll::Pending;
+                }
+            }
+
+            // Start a new write operation
+            let stream = self.inner.clone();
+            let state_clone = self.state.clone();
+            let waker = cx.waker().clone();
+            let write_data = buf.to_vec();
+            let write_len = write_data.len();
+            
+            let pending = PendingWrite {
+                waker: waker.clone(),
+                data: write_data.clone(),
+                result: None,
+            };
+            state.pending_writes.push_back(pending);
+            drop(state);
+
+            // Spawn the write operation
+            tokio_uring::spawn(async move {
+                let mut guard = stream.lock().await;
+                let (result, _) = guard.write(write_data).submit().await;
+                
+                let final_result = match result {
+                    Ok(_) => Ok(write_len),
+                    Err(e) => Err(e),
+                };
+
+                // Store result and wake
+                let mut state = state_clone.lock().unwrap();
+                if let Some(pending) = state.pending_writes.back_mut() {
+                    pending.result = Some(final_result);
+                    pending.waker.wake_by_ref();
+                }
+            });
+
+            Poll::Pending
         }
 
         fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<(), io::Error>> {
@@ -115,97 +239,13 @@ pub mod net {
         pub async fn accept(&self) -> io::Result<(TcpStream, SocketAddr)> {
             let (stream, addr) = self.inner.accept().await?;
             let wrapped_stream = TcpStream { 
-                inner: Arc::new(RefCell::new(stream)),
+                inner: Arc::new(tokio::sync::Mutex::new(stream)),
+                state: Arc::new(Mutex::new(StreamState {
+                    pending_reads: VecDeque::new(),
+                    pending_writes: VecDeque::new(),
+                })),
             };
             Ok((wrapped_stream, addr))
-        }
-        
-        /// Direct access to the underlying io_uring listener
-        pub fn inner(&self) -> &tokio_uring::net::TcpListener {
-            &self.inner
-        }
-    }
-    
-    /// Native io_uring WebSocket implementation
-    /// This bypasses AsyncRead/AsyncWrite for optimal performance
-    pub struct UringWebSocket {
-        stream: tokio_uring::net::TcpStream,
-        role: crate::Role,
-        buffer: Vec<u8>,
-    }
-    
-    impl UringWebSocket {
-        pub fn new(stream: tokio_uring::net::TcpStream, role: crate::Role) -> Self {
-            Self {
-                stream,
-                role,
-                buffer: Vec::with_capacity(8192),
-            }
-        }
-        
-        /// Read a WebSocket frame using native io_uring operations
-        pub async fn read_frame_native(&mut self) -> io::Result<Vec<u8>> {
-            // Read at least 2 bytes for the frame header
-            self.buffer.clear();
-            self.buffer.resize(2, 0);
-            
-            let (result, buf) = self.stream.read(self.buffer.clone()).await;
-            let n = result?;
-            self.buffer = buf;
-            
-            if n < 2 {
-                return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "Not enough data"));
-            }
-            
-            // Parse frame header to determine total frame size
-            let payload_len = self.buffer[1] & 0x7F;
-            let mut total_header_size = 2;
-            
-            // Handle extended payload length
-            if payload_len == 126 {
-                total_header_size += 2;
-            } else if payload_len == 127 {
-                total_header_size += 8;
-            }
-            
-            // Add mask size if present
-            if self.buffer[1] & 0x80 != 0 {
-                total_header_size += 4;
-            }
-            
-            // Read remaining header if needed
-            if n < total_header_size {
-                let additional = vec![0u8; total_header_size - n];
-                let (result, additional_buf) = self.stream.read(additional).await;
-                let additional_n = result?;
-                self.buffer.extend_from_slice(&additional_buf[..additional_n]);
-            }
-            
-            // Calculate actual payload length
-            let actual_payload_len = match payload_len {
-                126 => u16::from_be_bytes([self.buffer[2], self.buffer[3]]) as usize,
-                127 => u64::from_be_bytes([
-                    self.buffer[2], self.buffer[3], self.buffer[4], self.buffer[5],
-                    self.buffer[6], self.buffer[7], self.buffer[8], self.buffer[9]
-                ]) as usize,
-                len => len as usize,
-            };
-            
-            // Read payload if present
-            if actual_payload_len > 0 {
-                let payload = vec![0u8; actual_payload_len];
-                let (result, payload_buf) = self.stream.read(payload).await;
-                let payload_n = result?;
-                self.buffer.extend_from_slice(&payload_buf[..payload_n]);
-            }
-            
-            Ok(self.buffer.clone())
-        }
-        
-        /// Write a WebSocket frame using native io_uring operations
-        pub async fn write_frame_native(&mut self, frame_data: Vec<u8>) -> io::Result<()> {
-            let (result, _) = self.stream.write_all(frame_data).await;
-            result
         }
     }
 }
