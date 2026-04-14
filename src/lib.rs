@@ -163,6 +163,8 @@ mod mask;
 #[cfg(feature = "upgrade")]
 #[cfg_attr(docsrs, doc(cfg(feature = "upgrade")))]
 pub mod upgrade;
+/// io_uring integration.
+pub mod uring;
 
 use bytes::Buf;
 

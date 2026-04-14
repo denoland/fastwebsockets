@@ -38,7 +38,8 @@ path = "examples/echo_server_split.rs"
 required-features = ["upgrade", "unstable-split"]
 
 [dependencies]
-tokio = { version = "1.25.0", default-features = false, features = ["io-util"] }
+tokio = { version = "1.25.0", default-features = false, features = ["io-util", "net", "rt"] }
+tokio-uring = { version = "0.5.0", optional = true }
 simdutf8 = { version = "0.1.5", optional = true }
 hyper-util = { version = "0.1.0", features = ["tokio"], optional = true }
 http-body-util = { version = "0.1.0", optional = true }
@@ -72,6 +73,8 @@ upgrade = [
 ]
 simd = ["simdutf8"]
 unstable-split = []
+# io_uring support
+io-uring = ["tokio-uring"]
 # Axum integration
 with_axum = ["axum-core", "http", "async-trait"]
 
@@ -107,6 +110,14 @@ required-features = ["upgrade"]
 
 [[bench]]
 name = "unmask"
+harness = false
+
+[[bench]]
+name = "uring_comparison"
+harness = false
+
+[[bench]]
+name = "echo_server_benchmark"
 harness = false
 
 # Build release with debug symbols: cargo build --profile=release-with-debug
