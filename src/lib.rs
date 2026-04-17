@@ -645,13 +645,7 @@ impl ReadHalf {
       OpCode::Ping if self.auto_pong => {
         (Ok(None), Some(Frame::pong(frame.payload)))
       }
-      OpCode::Text => {
-        if frame.fin && !frame.is_utf8() {
-          (Err(WebSocketError::InvalidUTF8), None)
-        } else {
-          (Ok(Some(frame)), None)
-        }
-      }
+      OpCode::Text => (Ok(Some(frame)), None),
       _ => (Ok(Some(frame)), None),
     }
   }
