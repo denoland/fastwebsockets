@@ -9,13 +9,13 @@
 Y-axis is number of messages sent per sec. (size per message = payload size)
 
 ```
-Linux divy 5.19.0-1022-gcp #24~22.04.1-Ubuntu SMP x86_64 GNU/Linux
+Darwin Divys-MacBook-Pro-2.local 24.6.0 Darwin Kernel Version 24.6.0: Mon Jul 14 11:30:40 PDT 2025; root:xnu-11417.140.69~1/RELEASE_ARM64_T6041 arm64 arm Darwin
 
-32GiB System memory
-Intel(R) Xeon(R) CPU @ 3.10GHz
+64GiB System memory
+Apple M4 Max
 
-fastwebsockets 0.4.2
-rust-websocket 0.26.5
-uWebSockets (main d043038)
-tokio-tungstenite 0.18.0
+fastwebsockets 0.11.0
+rust-websocket 0.27.0
+uWebSockets (main 65f0af8)
+tokio-tungstenite 0.28.0
 ```
