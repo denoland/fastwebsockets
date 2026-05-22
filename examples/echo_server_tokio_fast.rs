@@ -149,8 +149,8 @@ fn main() -> std::io::Result<()> {
   let rt = tokio::runtime::Builder::new_current_thread()
     .enable_io()
     .build()?;
-  let addr = std::env::var("FWS_ADDR")
-    .unwrap_or_else(|_| "127.0.0.1:8080".to_string());
+  let addr =
+    std::env::var("FWS_ADDR").unwrap_or_else(|_| "127.0.0.1:8080".to_string());
   rt.block_on(async move {
     let listener = TcpListener::bind(&addr).await?;
     eprintln!("tokio-fast echo listening on {}", addr);
