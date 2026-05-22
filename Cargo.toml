@@ -13,6 +13,11 @@ path = "examples/echo_server.rs"
 required-features = ["upgrade"]
 
 [[example]]
+name = "echo_server_low"
+path = "examples/echo_server_low.rs"
+required-features = ["upgrade"]
+
+[[example]]
 name = "autobahn_client"
 path = "examples/autobahn_client.rs"
 required-features = ["upgrade"]

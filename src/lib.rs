@@ -191,7 +191,12 @@ pub enum Role {
   Client,
 }
 
-pub(crate) struct WriteHalf {
+/// Write side of a [`WebSocket`].
+///
+/// Reachable via [`WebSocket::parts_mut`] for performance-sensitive callers
+/// that want disjoint borrows of read and write state. Field internals are
+/// private so the layout can evolve.
+pub struct WriteHalf {
   role: Role,
   closed: bool,
   vectored: bool,
@@ -200,12 +205,16 @@ pub(crate) struct WriteHalf {
   write_buffer: Vec<u8>,
 }
 
-pub(crate) struct ReadHalf {
+/// Read side of a [`WebSocket`].
+///
+/// Reachable via [`WebSocket::parts_mut`] for performance-sensitive callers
+/// that want disjoint borrows of read and write state. Field internals are
+/// private so the layout can evolve.
+pub struct ReadHalf {
   role: Role,
   auto_apply_mask: bool,
   auto_close: bool,
   auto_pong: bool,
-  writev_threshold: usize,
   max_message_size: usize,
   buffer: BytesMut,
 }
@@ -253,8 +262,8 @@ impl<'f, S> WebSocketRead<S> {
     (self.stream, self.read_half)
   }
 
-  pub fn set_writev_threshold(&mut self, threshold: usize) {
-    self.read_half.writev_threshold = threshold;
+  pub fn set_writev_threshold(&mut self, _threshold: usize) {
+    // No-op on the read half (kept for API stability).
   }
 
   /// Sets whether to automatically close the connection when a close frame is received. When set to `false`, the application will have to manually send close frames.
@@ -289,7 +298,7 @@ impl<'f, S> WebSocketRead<S> {
   pub async fn read_frame<R, E>(
     &mut self,
     send_fn: &mut impl FnMut(Frame<'f>) -> R,
-  ) -> Result<Frame, WebSocketError>
+  ) -> Result<Frame<'_>, WebSocketError>
   where
     S: AsyncRead + Unpin,
     E: Into<Box<dyn std::error::Error + Send + Sync + 'static>>,
@@ -397,6 +406,46 @@ impl<'f, S> WebSocket<S> {
     }
   }
 
+  /// Creates a new `WebSocket` from a stream and an initial chunk of bytes
+  /// that were already read off the wire during HTTP upgrade negotiation.
+  ///
+  /// Use this when downcasting `hyper::upgrade::Upgraded` to the underlying
+  /// transport: hyper hands back a `read_buf` that may contain bytes the
+  /// client sent immediately after the upgrade request. Those bytes belong
+  /// to the WebSocket framing layer and must be consumed before reading
+  /// further from `stream`.
+  pub fn after_handshake_with_buffer<B: AsRef<[u8]>>(
+    stream: S,
+    role: Role,
+    initial_buffer: B,
+  ) -> Self
+  where
+    S: AsyncRead + AsyncWrite + Unpin,
+  {
+    let mut read_half = ReadHalf::after_handshake(role);
+    let initial = initial_buffer.as_ref();
+    if !initial.is_empty() {
+      read_half.buffer.extend_from_slice(initial);
+    }
+    Self {
+      stream,
+      write_half: WriteHalf::after_handshake(role),
+      read_half,
+    }
+  }
+
+  /// Borrow the inner stream and the read/write halves disjointly. Useful for
+  /// callers that want to drive read and write without taking `&mut self` on
+  /// the whole `WebSocket` — e.g. an echo loop that holds a borrowed frame
+  /// from the read buffer while it issues a write through the stream.
+  ///
+  /// Most users want `read_frame` / `write_frame`. This is escape hatch for
+  /// performance-sensitive paths that want to avoid copying the payload out.
+  #[inline]
+  pub fn parts_mut(&mut self) -> (&mut S, &mut ReadHalf, &mut WriteHalf) {
+    (&mut self.stream, &mut self.read_half, &mut self.write_half)
+  }
+
   /// Split a [`WebSocket`] into a [`WebSocketRead`] and [`WebSocketWrite`] half. Note that the split version does not
   /// handle fragmented packets and you may wish to create a [`FragmentCollectorRead`] over top of the read half that
   /// is returned.
@@ -445,7 +494,6 @@ impl<'f, S> WebSocket<S> {
   }
 
   pub fn set_writev_threshold(&mut self, threshold: usize) {
-    self.read_half.writev_threshold = threshold;
     self.write_half.writev_threshold = threshold;
   }
 
@@ -573,19 +621,46 @@ impl<'f, S> WebSocket<S> {
 
 const MAX_HEADER_SIZE: usize = 14;
 
+// Initial read-buffer capacity. Larger is better because it lets a single
+// `recv` drain whatever the kernel has queued for this socket, including
+// multiple pipelined frames. uWebSockets uses a 512 KiB shared recv buffer
+// for the same reason; per-connection buffers in tokio land amortize that
+// across the BytesMut allocation path. 64 KiB fits comfortably in L2 and
+// covers the 16 KiB-frame benchmark in a single read.
+const INITIAL_READ_BUFFER_CAPACITY: usize = 64 * 1024;
+
 impl ReadHalf {
   pub fn after_handshake(role: Role) -> Self {
-    let buffer = BytesMut::with_capacity(8192);
+    let buffer = BytesMut::with_capacity(INITIAL_READ_BUFFER_CAPACITY);
 
     Self {
       role,
       auto_apply_mask: true,
       auto_close: true,
       auto_pong: true,
-      writev_threshold: 1024,
       max_message_size: 64 << 20,
       buffer,
     }
+  }
+
+  /// Reads one frame using the provided stream as the byte source.
+  ///
+  /// This is the public entry point for callers that took
+  /// [`WebSocket::parts_mut`] and want to drive the read half independently.
+  /// It carries the same auto-pong/auto-close behavior as
+  /// [`WebSocket::read_frame`]: if a Ping is received and `auto_pong` is on
+  /// (the default), or a Close is received and `auto_close` is on (also
+  /// default), this method returns a tuple where the second element is the
+  /// frame the caller must send back. Callers are obligated to write it
+  /// before continuing, otherwise the protocol state will drift.
+  pub async fn read_frame<'f, S>(
+    &mut self,
+    stream: &mut S,
+  ) -> (Result<Option<Frame<'f>>, WebSocketError>, Option<Frame<'f>>)
+  where
+    S: AsyncRead + Unpin,
+  {
+    self.read_frame_inner(stream).await
   }
 
   /// Attempt to read a single frame from the incoming stream, returning any send obligations if
@@ -820,4 +895,49 @@ mod tests {
     }
     assert_unsync::<WebSocket<tokio::net::TcpStream>>();
   };
+
+  // `parts_mut` gives disjoint borrows of stream + read half + write half;
+  // it's the API contract for callers who want to hold a borrowed frame
+  // while writing through the same socket.
+  #[tokio::test]
+  async fn parts_mut_drives_read_and_write() {
+    use std::io::Cursor;
+    // Two binary frames in the prefix; the write side accumulates into a Vec.
+    let mut frames = vec![0x82, 0x02, b'h', b'i'];
+    frames.extend_from_slice(&[0x82, 0x03, b'b', b'y', b'e']);
+    let stream = tokio::io::join(Cursor::new(frames), Vec::<u8>::new());
+    let mut ws = WebSocket::after_handshake(stream, Role::Server);
+    let (stream, read, _write) = ws.parts_mut();
+    let (res, _) = read.read_frame(stream).await;
+    let f = res.unwrap().unwrap();
+    assert_eq!(&f.payload[..], b"hi");
+    let (res, _) = read.read_frame(stream).await;
+    let f = res.unwrap().unwrap();
+    assert_eq!(&f.payload[..], b"bye");
+  }
+
+  // The initial-buffer constructor must seed the read buffer such that a
+  // subsequent `read_frame` parses frames from those bytes without needing a
+  // single byte from the (empty) stream. This covers the downcast-after-
+  // upgrade pattern where hyper hands back a prefix of bytes the client sent
+  // immediately after the upgrade request.
+  #[tokio::test]
+  async fn after_handshake_with_buffer_consumes_prefix() {
+    use std::io::Cursor;
+    // Build a single unmasked binary frame "hi"
+    let mut frame = vec![0x82, 0x02, b'h', b'i'];
+    // Tack on a second frame
+    frame.extend_from_slice(&[0x82, 0x03, b'b', b'y', b'e']);
+    // Empty back-end stream — all data lives in initial_buffer.
+    let empty: Cursor<Vec<u8>> = Cursor::new(Vec::new());
+    let mut ws = WebSocket::after_handshake_with_buffer(
+      empty,
+      Role::Server,
+      &frame,
+    );
+    let f1 = ws.read_frame().await.unwrap();
+    assert_eq!(&f1.payload[..], b"hi");
+    let f2 = ws.read_frame().await.unwrap();
+    assert_eq!(&f2.payload[..], b"bye");
+  }
 }
