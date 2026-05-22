@@ -159,6 +159,13 @@ mod frame;
 #[cfg_attr(docsrs, doc(cfg(feature = "upgrade")))]
 pub mod handshake;
 mod mask;
+/// Single-thread mio-driven server-side reactor that drives many
+/// WebSocket sessions through [`ServerEngine`] with one event loop
+/// and one shared receive buffer. Linux only; opt-in via the
+/// `reactor` feature.
+#[cfg(all(target_os = "linux", feature = "reactor"))]
+#[cfg_attr(docsrs, doc(cfg(feature = "reactor")))]
+pub mod reactor;
 mod sync_server;
 /// HTTP upgrades.
 #[cfg(feature = "upgrade")]

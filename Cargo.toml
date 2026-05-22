@@ -35,6 +35,14 @@ name = "echo_server_tokio_fast"
 path = "examples/echo_server_tokio_fast.rs"
 required-features = ["upgrade"]
 
+# Minimal demo of the public `crate::reactor::Reactor` API. Single
+# event loop drives many sessions; no tokio, no per-connection task.
+# Linux-only.
+[[example]]
+name = "echo_server_reactor"
+path = "examples/echo_server_reactor.rs"
+required-features = ["reactor"]
+
 [[example]]
 name = "autobahn_client"
 path = "examples/autobahn_client.rs"
@@ -83,6 +91,14 @@ axum-core = { version = "0.5.0", optional = true }
 http = { version = "1", optional = true }
 async-trait = { version = "0.1", optional = true }
 
+# Linux mio-driven reactor (opt-in via the `reactor` feature). Wraps
+# many WebSocket sessions on one thread / one event loop, sharing one
+# scratch buffer — the framing path that closes the high-fd / high-
+# payload gap to uWebSockets without spinning per-connection tokio
+# tasks. See `src/reactor.rs` and `examples/echo_server_reactor.rs`.
+mio = { version = "1.0", features = ["net", "os-poll"], optional = true }
+slab = { version = "0.4", optional = true }
+
 [features]
 default = ["simd"]
 upgrade = [
@@ -97,6 +113,8 @@ simd = ["simdutf8"]
 unstable-split = []
 # Axum integration
 with_axum = ["axum-core", "http", "async-trait"]
+# Linux mio-driven server-side reactor. See `crate::reactor`.
+reactor = ["mio", "slab", "base64", "sha1"]
 
 [dev-dependencies]
 tokio = { version = "1.25.0", features = ["full", "macros"] }
@@ -118,6 +136,7 @@ axum = "0.8.1"
 socket2 = "0.5"
 mio = { version = "1.0", features = ["net", "os-poll"] }
 slab = "0.4"
+libc = "0.2"
 
 [[test]]
 name = "upgrade"
