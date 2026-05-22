@@ -376,3 +376,141 @@ repr_u8! {
 pub fn is_control(opcode: OpCode) -> bool {
   matches!(opcode, OpCode::Close | OpCode::Ping | OpCode::Pong)
 }
+
+/// Result of [`parse_header`].
+#[derive(Debug)]
+pub enum HeaderParse {
+  /// Header is fully parsed; `header` describes it and `total_len()`
+  /// bytes from the start of the input slice constitute one frame.
+  Complete(Header),
+  /// Need at least `at_least` more bytes before retrying.
+  Incomplete { at_least: usize },
+}
+
+/// Parsed WebSocket frame header. The payload bytes live at
+/// `buf[header_len .. header_len + payload_len]` of the original input
+/// slice — the parser doesn't take ownership of anything, it just
+/// describes where the parts live.
+#[derive(Debug, Clone, Copy)]
+pub struct Header {
+  /// FIN bit (final fragment).
+  pub fin: bool,
+  /// Frame opcode.
+  pub opcode: OpCode,
+  /// Masking key if the frame is masked, else `None`. Server-side
+  /// callers must apply this to the payload (or call
+  /// [`crate::unmask`]) before forwarding the frame.
+  pub mask: Option<[u8; 4]>,
+  /// Number of bytes the header itself occupies — i.e. the offset of
+  /// the payload from the start of the input slice. This includes the
+  /// 2 fixed bytes, the extended length (2 or 8 bytes if present), and
+  /// the 4 mask bytes if present.
+  pub header_len: usize,
+  /// Length of the payload in bytes.
+  pub payload_len: usize,
+}
+
+impl Header {
+  /// Total frame length on the wire, header + payload.
+  #[inline]
+  pub fn total_len(&self) -> usize {
+    self.header_len + self.payload_len
+  }
+}
+
+/// Synchronously parse a WebSocket frame header from a byte slice.
+///
+/// This is the same protocol logic used by `WebSocket::read_frame`
+/// internally, exposed as a sync function so callers driving their
+/// own event loop (mio, io_uring, callback-style frameworks) can
+/// reuse it. On success, the parser only validates RFC-6455-required
+/// invariants on the header itself (RSV bits, control-frame
+/// fragmentation, ping frame size). UTF-8 validation, payload-size
+/// limits, control-frame opcode validity, etc. are the caller's
+/// responsibility — same split of duties as the existing async path.
+///
+/// Returns:
+/// - `Ok(HeaderParse::Complete(header))` when at least
+///   `header.total_len()` bytes have been seen and the header is
+///   well-formed.
+/// - `Ok(HeaderParse::Incomplete { at_least })` when the slice is too
+///   short to decide; the caller should read more from the wire and
+///   retry once it has at least `at_least` bytes.
+/// - `Err(_)` on a protocol-level malformed header.
+///
+/// The function does not advance any cursor or modify the input —
+/// drive that yourself with `header.total_len()`.
+pub fn parse_header(buf: &[u8]) -> Result<HeaderParse, WebSocketError> {
+  if buf.len() < 2 {
+    return Ok(HeaderParse::Incomplete { at_least: 2 });
+  }
+  let b0 = buf[0];
+  let b1 = buf[1];
+
+  let fin = (b0 & 0b1000_0000) != 0;
+  let rsv1 = (b0 & 0b0100_0000) != 0;
+  let rsv2 = (b0 & 0b0010_0000) != 0;
+  let rsv3 = (b0 & 0b0001_0000) != 0;
+  if rsv1 || rsv2 || rsv3 {
+    return Err(WebSocketError::ReservedBitsNotZero);
+  }
+  let opcode = OpCode::try_from(b0 & 0x0f)?;
+  let masked = (b1 & 0x80) != 0;
+  let len_code = b1 & 0x7f;
+
+  let (length_bytes, payload_len) = match len_code {
+    0..=125 => (0usize, len_code as usize),
+    126 => {
+      if buf.len() < 4 {
+        return Ok(HeaderParse::Incomplete { at_least: 4 });
+      }
+      (2, u16::from_be_bytes([buf[2], buf[3]]) as usize)
+    }
+    127 => {
+      if buf.len() < 10 {
+        return Ok(HeaderParse::Incomplete { at_least: 10 });
+      }
+      #[cfg(target_pointer_width = "64")]
+      let len = u64::from_be_bytes(buf[2..10].try_into().unwrap()) as usize;
+      #[cfg(any(target_pointer_width = "16", target_pointer_width = "32"))]
+      let len = match usize::try_from(u64::from_be_bytes(
+        buf[2..10].try_into().unwrap(),
+      )) {
+        Ok(v) => v,
+        Err(_) => return Err(WebSocketError::FrameTooLarge),
+      };
+      (8, len)
+    }
+    _ => unreachable!(),
+  };
+
+  let mask_off = 2 + length_bytes;
+  let header_len = mask_off + if masked { 4 } else { 0 };
+  if buf.len() < header_len {
+    return Ok(HeaderParse::Incomplete {
+      at_least: header_len,
+    });
+  }
+  let mask = if masked {
+    let mut m = [0u8; 4];
+    m.copy_from_slice(&buf[mask_off..mask_off + 4]);
+    Some(m)
+  } else {
+    None
+  };
+
+  if is_control(opcode) && !fin {
+    return Err(WebSocketError::ControlFrameFragmented);
+  }
+  if opcode == OpCode::Ping && payload_len > 125 {
+    return Err(WebSocketError::PingFrameTooLarge);
+  }
+
+  Ok(HeaderParse::Complete(Header {
+    fin,
+    opcode,
+    mask,
+    header_len,
+    payload_len,
+  }))
+}

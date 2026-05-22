@@ -180,7 +180,10 @@ pub use crate::error::WebSocketError;
 pub use crate::fragment::FragmentCollector;
 #[cfg(feature = "unstable-split")]
 pub use crate::fragment::FragmentCollectorRead;
+pub use crate::frame::parse_header;
 pub use crate::frame::Frame;
+pub use crate::frame::Header;
+pub use crate::frame::HeaderParse;
 pub use crate::frame::OpCode;
 pub use crate::frame::Payload;
 pub use crate::mask::unmask;
@@ -902,6 +905,67 @@ mod tests {
     }
     assert_unsync::<WebSocket<tokio::net::TcpStream>>();
   };
+
+  // `parse_header` is the sync entry point that callers driving their own
+  // event loop (mio, callback frameworks) use to parse a frame header out
+  // of a byte buffer without spinning up the async/BytesMut path.
+  #[test]
+  fn parse_header_short_and_extended_lengths() {
+    // Unmasked short text frame [0x81, 0x05, "hello"]
+    let buf = [0x81, 0x05, b'h', b'e', b'l', b'l', b'o'];
+    match parse_header(&buf).unwrap() {
+      HeaderParse::Complete(h) => {
+        assert!(h.fin);
+        assert_eq!(h.opcode, OpCode::Text);
+        assert_eq!(h.mask, None);
+        assert_eq!(h.header_len, 2);
+        assert_eq!(h.payload_len, 5);
+        assert_eq!(h.total_len(), 7);
+      }
+      other => panic!("expected Complete, got {:?}", other),
+    }
+    // Need-more: 1 byte only.
+    match parse_header(&buf[..1]).unwrap() {
+      HeaderParse::Incomplete { at_least } => assert_eq!(at_least, 2),
+      other => panic!("expected Incomplete, got {:?}", other),
+    }
+    // Masked extended (ext-126) 16-KiB frame header: [0x82, 0xfe,
+    // 0x40, 0x00, m0,m1,m2,m3] — 8 header bytes, 16 384 payload.
+    let mut buf2 = vec![0x82, 0xfe, 0x40, 0x00, 0x01, 0x02, 0x03, 0x04];
+    buf2.extend(std::iter::repeat(0xAB).take(16384));
+    match parse_header(&buf2).unwrap() {
+      HeaderParse::Complete(h) => {
+        assert!(h.fin);
+        assert_eq!(h.opcode, OpCode::Binary);
+        assert_eq!(h.mask, Some([0x01, 0x02, 0x03, 0x04]));
+        assert_eq!(h.header_len, 8);
+        assert_eq!(h.payload_len, 16384);
+        assert_eq!(h.total_len(), 16392);
+      }
+      other => panic!("expected Complete, got {:?}", other),
+    }
+    // Need-more progression: short of length bytes, then short of mask.
+    match parse_header(&buf2[..2]).unwrap() {
+      HeaderParse::Incomplete { at_least } => assert_eq!(at_least, 4),
+      other => panic!("expected Incomplete len, got {:?}", other),
+    }
+    match parse_header(&buf2[..4]).unwrap() {
+      HeaderParse::Incomplete { at_least } => assert_eq!(at_least, 8),
+      other => panic!("expected Incomplete mask, got {:?}", other),
+    }
+    // Protocol error: RSV1 set on a non-extension frame.
+    let bad = [0xc1, 0x00];
+    assert!(matches!(
+      parse_header(&bad),
+      Err(WebSocketError::ReservedBitsNotZero)
+    ));
+    // Protocol error: fragmented control frame (Close, no FIN).
+    let bad2 = [0x08, 0x00];
+    assert!(matches!(
+      parse_header(&bad2),
+      Err(WebSocketError::ControlFrameFragmented)
+    ));
+  }
 
   // `parts_mut` gives disjoint borrows of stream + read half + write half;
   // it's the API contract for callers who want to hold a borrowed frame

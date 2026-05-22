@@ -67,7 +67,10 @@ mod linux {
   use mio::Poll;
   use mio::Token;
 
+  use fastwebsockets::parse_header;
   use fastwebsockets::unmask;
+  use fastwebsockets::HeaderParse;
+  use fastwebsockets::OpCode;
 
   const LISTENER: Token = Token(0);
 
@@ -290,80 +293,46 @@ mod linux {
         break;
       }
       let off = read_pos;
-      let b0 = scratch[off];
-      let b1 = scratch[off + 1];
-      let fin = (b0 & 0x80) != 0;
-      let opcode = b0 & 0x0f;
-      let masked = (b1 & 0x80) != 0;
-      let len_code = b1 & 0x7f;
-
-      let (header_size, payload_len): (usize, usize) = match len_code {
-        0..=125 => (2, len_code as usize),
-        126 => {
-          if avail < 4 {
-            break;
-          }
-          (
-            4,
-            u16::from_be_bytes([scratch[off + 2], scratch[off + 3]]) as usize,
-          )
-        }
-        127 => {
-          if avail < 10 {
-            break;
-          }
-          (
-            10,
-            u64::from_be_bytes(scratch[off + 2..off + 10].try_into().unwrap())
-              as usize,
-          )
-        }
-        _ => unreachable!(),
+      let hdr = match parse_header(&scratch[off..filled]) {
+        Ok(HeaderParse::Complete(h)) => h,
+        Ok(HeaderParse::Incomplete { .. }) => break,
+        Err(_) => return true,
       };
-      let mask_size = if masked { 4 } else { 0 };
-      let total_header = header_size + mask_size;
-      if avail < total_header {
-        break;
-      }
-      let frame_total = total_header + payload_len;
+      let frame_total = hdr.total_len();
       if frame_total > scratch.len() {
-        // Pathologically large frame — clean shutdown.
         return true;
       }
       if avail < frame_total {
         break;
       }
 
-      let mask_bytes = if masked {
-        let mut m = [0u8; 4];
-        m.copy_from_slice(&scratch[off + header_size..off + header_size + 4]);
-        Some(m)
-      } else {
-        None
-      };
+      let payload_start = off + hdr.header_len;
+      let payload_end = off + frame_total;
 
-      if let Some(m) = mask_bytes {
-        unmask(&mut scratch[off + total_header..off + frame_total], m);
+      if let Some(m) = hdr.mask {
+        unmask(&mut scratch[payload_start..payload_end], m);
       }
 
-      if !fin && opcode != 0 {
+      if !hdr.fin && hdr.opcode != OpCode::Continuation {
         return true;
       }
 
-      let resp_opcode = match opcode {
-        0x1 | 0x2 => 0x80 | opcode,
-        0x9 => 0x8A,
-        0x8 => 0x88,
+      let opcode_byte = hdr.opcode as u8;
+      let resp_opcode = match hdr.opcode {
+        OpCode::Text | OpCode::Binary => 0x80 | opcode_byte,
+        OpCode::Ping => 0x8A,
+        OpCode::Close => 0x88,
         _ => {
           read_pos += frame_total;
           continue;
         }
       };
-      let close_after = opcode == 0x8;
-      let inplace_ok = masked && payload_len < 65536;
+      let close_after = hdr.opcode == OpCode::Close;
+      let payload_len = hdr.payload_len;
+      let inplace_ok = hdr.mask.is_some() && payload_len < 65536;
       if inplace_ok {
         let resp_hdr_len = if payload_len < 126 { 2 } else { 4 };
-        let resp_start = off + total_header - resp_hdr_len;
+        let resp_start = payload_start - resp_hdr_len;
         scratch[resp_start] = resp_opcode;
         if payload_len < 126 {
           scratch[resp_start + 1] = payload_len as u8;
@@ -377,7 +346,7 @@ mod linux {
         let _ = write_contig_now(&mut conn.stream, &mut conn.wq, bytes);
       } else {
         let n = fmt_server_head(&mut head, resp_opcode & 0x7f, payload_len);
-        let payload = &scratch[off + total_header..off + frame_total];
+        let payload = &scratch[payload_start..payload_end];
         let iovs = [IoSlice::new(&head[..n]), IoSlice::new(payload)];
         let _ = write_now(&mut conn.stream, &mut conn.wq, &iovs);
       }
