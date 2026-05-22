@@ -358,50 +358,84 @@ mod linux {
       }
 
       if !fin && opcode != 0 {
-        // Fragments: the mio fast-path keeps the same simplification as
-        // echo_server_low.rs and bails out. Production users would add
-        // FragmentCollector-equivalent state here.
         return true;
       }
-      let Conn {
-        stream, rbuf, wq, ..
-      } = conn;
-      match opcode {
-        0x1 | 0x2 => {
-          let n = fmt_server_head(&mut head, opcode, payload_len);
-          // The unmasked payload lives in conn.rbuf, so the writev's
-          // second iovec is a slice straight out of that buffer — zero
-          // copy.
-          let payload = &rbuf[total_header..frame_total];
-          let iovs = [IoSlice::new(&head[..n]), IoSlice::new(payload)];
-          if write_now(stream, wq, &iovs).is_err() {
-            return true;
-          }
+
+      // In-place response synthesis: rewrite the response header into
+      // the mask slot (mask is already consumed by the in-place unmask
+      // above), then send `buf[mask_offset..frame_total]` as a single
+      // contiguous write — no writev, no scatter/gather. Only viable
+      // when the response header fits where the input mask sat (true
+      // for payload_len < 65 536; ext-127 needs 10 bytes vs mask's 4).
+      let resp_opcode = match opcode {
+        0x1 | 0x2 => 0x80 | opcode,
+        0x9 => 0x8A,
+        0x8 => 0x88,
+        _ => {
+          compact(conn, frame_total);
+          continue;
         }
-        0x8 => {
-          let n = fmt_server_head(&mut head, 0x8, payload_len);
-          let payload = &rbuf[total_header..frame_total];
-          let iovs = [IoSlice::new(&head[..n]), IoSlice::new(payload)];
-          let _ = write_now(stream, wq, &iovs);
+      };
+      let close_after = opcode == 0x8;
+      let inplace_ok = masked && payload_len < 65536;
+      if inplace_ok {
+        let resp_hdr_len = if payload_len < 126 { 2 } else { 4 };
+        let resp_start = total_header - resp_hdr_len;
+        conn.rbuf[resp_start] = resp_opcode;
+        if payload_len < 126 {
+          conn.rbuf[resp_start + 1] = payload_len as u8;
+        } else {
+          conn.rbuf[resp_start + 1] = 126;
+          conn.rbuf[resp_start + 2] = (payload_len >> 8) as u8;
+          conn.rbuf[resp_start + 3] = (payload_len & 0xff) as u8;
+        }
+        let payload_total = resp_hdr_len + payload_len;
+        let stream = &mut conn.stream;
+        let wq = &mut conn.wq;
+        let bytes = &conn.rbuf[resp_start..resp_start + payload_total];
+        let _ = write_contig_now(stream, wq, bytes);
+        if close_after {
           return true;
         }
-        0x9 => {
-          let n = fmt_server_head(&mut head, 0xA, payload_len);
-          let payload = &rbuf[total_header..frame_total];
-          let iovs = [IoSlice::new(&head[..n]), IoSlice::new(payload)];
-          if write_now(stream, wq, &iovs).is_err() {
-            return true;
-          }
+      } else {
+        let Conn {
+          stream, rbuf, wq, ..
+        } = conn;
+        let n = fmt_server_head(&mut head, resp_opcode & 0x7f, payload_len);
+        let payload = &rbuf[total_header..frame_total];
+        let iovs = [IoSlice::new(&head[..n]), IoSlice::new(payload)];
+        let _ = write_now(stream, wq, &iovs);
+        if close_after {
+          return true;
         }
-        _ => {}
       }
 
-      // Slide unread bytes to the front. We do this per-frame for simplicity;
-      // it's a memmove of whatever's left, usually zero or one partial
-      // header.
       compact(conn, frame_total);
     }
     false
+  }
+
+  // Single contiguous write — same partial-write handling as write_now
+  // but without the iovec dance.
+  fn write_contig_now(
+    stream: &mut TcpStream,
+    wq: &mut VecDeque<u8>,
+    bytes: &[u8],
+  ) -> std::io::Result<()> {
+    if !wq.is_empty() {
+      wq.extend(bytes.iter());
+      return Ok(());
+    }
+    let n = match stream.write(bytes) {
+      Ok(0) => return Err(ErrorKind::WriteZero.into()),
+      Ok(n) => n,
+      Err(e) if e.kind() == ErrorKind::WouldBlock => 0,
+      Err(e) => return Err(e),
+    };
+    if n < bytes.len() {
+      wq.extend(bytes[n..].iter());
+    }
+    Ok(())
   }
 
   fn handle_writable(conn: &mut Conn) -> bool {
