@@ -17,6 +17,15 @@ name = "echo_server_low"
 path = "examples/echo_server_low.rs"
 required-features = ["upgrade"]
 
+# mio-driven echo server (Linux only) — tests whether the single-thread
+# gap to uWebSockets is in WebSocket framing/parsing or in Tokio/futures
+# runtime overhead. Uses fastwebsockets::unmask for SIMD masking; the
+# rest is a hand-rolled event loop on `mio::Poll`.
+[[example]]
+name = "echo_server_mio"
+path = "examples/echo_server_mio.rs"
+required-features = ["upgrade"]
+
 [[example]]
 name = "autobahn_client"
 path = "examples/autobahn_client.rs"
@@ -98,6 +107,8 @@ axum = "0.8.1"
 # sockets when FWS_WORKERS > 1. Tokio's TcpListener::bind does not expose
 # SO_REUSEPORT; we build the socket via socket2 and convert.
 socket2 = "0.5"
+mio = { version = "1.0", features = ["net", "os-poll"] }
+slab = "0.4"
 
 [[test]]
 name = "upgrade"
