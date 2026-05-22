@@ -103,27 +103,39 @@ async fn server_upgrade(
   Ok(response)
 }
 
-fn main() -> Result<(), WebSocketError> {
-  let workers = std::env::var("FWS_WORKERS")
-    .ok()
-    .and_then(|s| s.parse::<usize>().ok())
-    .unwrap_or(1);
-
-  let mut builder = if workers <= 1 {
-    tokio::runtime::Builder::new_current_thread()
+fn make_reuseport_listener(addr: &str) -> std::io::Result<TcpListener> {
+  use socket2::{Domain, Protocol, Socket, Type};
+  let parsed: std::net::SocketAddr = addr.parse().map_err(|e| {
+    std::io::Error::new(
+      std::io::ErrorKind::InvalidInput,
+      format!("bad addr: {}", e),
+    )
+  })?;
+  let domain = if parsed.is_ipv6() {
+    Domain::IPV6
   } else {
-    let mut b = tokio::runtime::Builder::new_multi_thread();
-    b.worker_threads(workers);
-    b
+    Domain::IPV4
   };
-  let rt = builder.enable_io().build().unwrap();
+  let sock = Socket::new(domain, Type::STREAM, Some(Protocol::TCP))?;
+  sock.set_reuse_address(true)?;
+  #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+  sock.set_reuse_port(true)?;
+  sock.set_nonblocking(true)?;
+  sock.bind(&parsed.into())?;
+  sock.listen(1024)?;
+  TcpListener::from_std(sock.into())
+}
 
-  let addr =
-    std::env::var("FWS_ADDR").unwrap_or_else(|_| "127.0.0.1:8080".to_string());
-
+fn run_worker(
+  worker_id: usize,
+  addr: String,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+  let rt = tokio::runtime::Builder::new_current_thread()
+    .enable_io()
+    .build()?;
   rt.block_on(async move {
-    let listener = TcpListener::bind(&addr).await?;
-    println!("Server started, listening on {}", addr);
+    let listener = make_reuseport_listener(&addr)?;
+    eprintln!("[worker {}] listening on {}", worker_id, addr);
     loop {
       let (stream, _) = listener.accept().await?;
       tokio::spawn(async move {
@@ -133,4 +145,40 @@ fn main() -> Result<(), WebSocketError> {
       });
     }
   })
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+  let workers = std::env::var("FWS_WORKERS")
+    .ok()
+    .and_then(|s| s.parse::<usize>().ok())
+    .unwrap_or(1);
+
+  let addr =
+    std::env::var("FWS_ADDR").unwrap_or_else(|_| "127.0.0.1:8080".to_string());
+
+  if workers <= 1 {
+    return run_worker(0, addr).map_err(|e| e.into());
+  }
+
+  // Multi-worker: each thread runs its own current_thread runtime and binds
+  // a SO_REUSEPORT listener on the same port. The kernel load-balances
+  // accept() across the listeners, so each connection lives entirely inside
+  // one worker (no cross-thread task migration). This is the same model
+  // uWebSockets recommends for scaling beyond one core.
+  let mut handles = Vec::with_capacity(workers);
+  for i in 0..workers {
+    let addr = addr.clone();
+    let h = std::thread::Builder::new()
+      .name(format!("fws-worker-{}", i))
+      .spawn(move || {
+        if let Err(e) = run_worker(i, addr) {
+          eprintln!("[worker {}] exiting: {}", i, e);
+        }
+      })?;
+    handles.push(h);
+  }
+  for h in handles {
+    let _ = h.join();
+  }
+  Ok(())
 }

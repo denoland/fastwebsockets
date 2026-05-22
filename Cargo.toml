@@ -94,6 +94,10 @@ anyhow = "1.0.71"
 webpki-roots = "0.23.0"
 bytes = "1.4.0"
 axum = "0.8.1"
+# Used by examples/echo_server.rs to set SO_REUSEPORT on per-worker listener
+# sockets when FWS_WORKERS > 1. Tokio's TcpListener::bind does not expose
+# SO_REUSEPORT; we build the socket via socket2 and convert.
+socket2 = "0.5"
 
 [[test]]
 name = "upgrade"

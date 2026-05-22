@@ -414,6 +414,7 @@ dependencies = [
  "rustls-pemfile",
  "sha1",
  "simdutf8",
+ "socket2",
  "thiserror",
  "tokio",
  "tokio-rustls",
