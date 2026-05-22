@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use fastwebsockets::upgrade;
+use fastwebsockets::FragmentCollector;
 use fastwebsockets::OpCode;
 use fastwebsockets::Role;
 use fastwebsockets::WebSocket;
@@ -28,10 +29,15 @@ use hyper_util::rt::TokioIo;
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
 
-async fn echo_loop<S>(mut ws: WebSocket<S>) -> Result<(), WebSocketError>
+async fn echo_loop<S>(ws: WebSocket<S>) -> Result<(), WebSocketError>
 where
   S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
+  // The bench load_test.c never fragments, but the Autobahn suite does and
+  // expects cross-fragment UTF-8 validation. Wrap with FragmentCollector so
+  // the example stays protocol-compliant; FragmentCollector is a thin
+  // pass-through for non-fragmented frames (one match per frame).
+  let mut ws = FragmentCollector::new(ws);
   loop {
     let frame = ws.read_frame().await?;
     match frame.opcode {
