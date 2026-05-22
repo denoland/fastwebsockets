@@ -188,6 +188,7 @@ pub use crate::frame::HeaderParse;
 pub use crate::frame::OpCode;
 pub use crate::frame::Payload;
 pub use crate::mask::unmask;
+pub use crate::sync_server::OutboundSegment;
 pub use crate::sync_server::ServerEngine;
 pub use crate::sync_server::ServerResponse;
 

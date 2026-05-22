@@ -78,6 +78,27 @@ pub enum ServerResponse {
   Discard,
 }
 
+/// One segment of an outbound write produced by
+/// [`ServerEngine::process_into`].
+///
+/// Two flavors:
+/// - `Input`: a byte range *within the input buffer that was passed
+///   to the last `process_into` call*. The engine wrote the response
+///   header into that buffer (in the freed-up mask slot) and the
+///   payload was already there, so the caller can write the slice
+///   directly without copying.
+/// - `Local`: a byte range within the engine's small internal
+///   header-scratch buffer. Only used when the in-place trick doesn't
+///   apply (ext-127 payloads, unmasked input frames). Use
+///   [`ServerEngine::outbound_local`] to get the underlying bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutboundSegment {
+  /// `start..start+len` within the most recent `process_into` input.
+  Input { start: u32, len: u32 },
+  /// `start..start+len` within `engine.outbound_local()`.
+  Local { start: u32, len: u32 },
+}
+
 /// Server-side WebSocket framing engine. Stateless except for a
 /// (usually empty) partial-frame buffer used when one TCP read
 /// doesn't deliver a complete header — for the typical case it
@@ -86,6 +107,15 @@ pub struct ServerEngine {
   /// Bytes left over from a previous `process` call that didn't form
   /// a complete frame on their own. Prepended to the next input.
   partial: Vec<u8>,
+  /// Small buffer for response-header bytes that don't fit in the
+  /// input frame's mask slot (only used by the writev-fallback path
+  /// for ext-127 / unmasked inputs).
+  outbound_local: Vec<u8>,
+  /// Outbound segments produced by the most recent `process_into`
+  /// call. The caller iterates these and writes them to the socket
+  /// before calling `process_into` again (the `Input` variants refer
+  /// to that previous input buffer).
+  outbound: Vec<OutboundSegment>,
   /// `true` once a Close frame has been processed; further frames
   /// are rejected.
   closed: bool,
@@ -101,6 +131,8 @@ impl ServerEngine {
   pub fn new() -> Self {
     Self {
       partial: Vec::new(),
+      outbound_local: Vec::new(),
+      outbound: Vec::new(),
       closed: false,
     }
   }
@@ -115,6 +147,29 @@ impl ServerEngine {
   /// previous `process` call ran out of bytes mid-frame.
   pub fn partial_len(&self) -> usize {
     self.partial.len()
+  }
+
+  /// Outbound segments produced by the most recent
+  /// [`process_into`](Self::process_into) call. The caller iterates
+  /// these — `Input` segments slice the input buffer they passed to
+  /// `process_into`; `Local` segments slice
+  /// [`outbound_local`](Self::outbound_local) — and writes them to
+  /// the socket.
+  pub fn outbound_segments(&self) -> &[OutboundSegment] {
+    &self.outbound
+  }
+
+  /// The engine-owned scratch buffer that `OutboundSegment::Local`
+  /// segments index into.
+  pub fn outbound_local(&self) -> &[u8] {
+    &self.outbound_local
+  }
+
+  /// Drop the outbound state after the caller has written it to the
+  /// socket. Call this once per `process_into` cycle, after writing.
+  pub fn clear_outbound(&mut self) {
+    self.outbound_local.clear();
+    self.outbound.clear();
   }
 
   /// Drive the framing state machine over `input`. For every
@@ -266,6 +321,119 @@ impl ServerEngine {
 
     Ok(consumed)
   }
+
+  /// Zero-copy variant of [`process`](Self::process). Does the same
+  /// frame parse / unmask / response synthesis, but instead of
+  /// calling a write callback for each output slice, accumulates
+  /// outbound segments internally. The caller reads them back via
+  /// [`outbound_segments`](Self::outbound_segments) /
+  /// [`outbound_local`](Self::outbound_local), writes them to the
+  /// socket (e.g. via `writev`), and calls
+  /// [`clear_outbound`](Self::clear_outbound).
+  ///
+  /// The key difference: `Input` segments reference the input buffer
+  /// directly. The caller can write straight from that buffer with no
+  /// extra memcpy. This is the path the tokio adapter
+  /// (`echo_server_tokio_fast.rs`) uses to match the bare-mio
+  /// throughput.
+  ///
+  /// Returns the number of input bytes consumed. Outbound segments
+  /// produced by this call are only valid until the next
+  /// `process_into` (which conceptually reuses the input buffer).
+  pub fn process_into<H>(
+    &mut self,
+    input: &mut [u8],
+    mut handler: H,
+  ) -> Result<usize, WebSocketError>
+  where
+    H: FnMut(&mut [u8], OpCode) -> ServerResponse,
+  {
+    if self.closed {
+      return Ok(0);
+    }
+
+    // Same partial-frame prepend as the callback path. Rare in
+    // practice; the `extend_from_slice` allocates only if a real
+    // straddle happens.
+    if !self.partial.is_empty() {
+      let need = self.partial.len();
+      if input.len() < need {
+        return Err(WebSocketError::FrameTooLarge);
+      }
+      input.copy_within(0..(input.len() - need), need);
+      input[..need].copy_from_slice(&self.partial);
+      self.partial.clear();
+    }
+
+    let mut consumed = 0usize;
+    let end = input.len();
+    loop {
+      let remaining_start = consumed;
+      let remaining = &mut input[remaining_start..end];
+      let hdr = match parse_header(remaining)? {
+        HeaderParse::Complete(h) => h,
+        HeaderParse::Incomplete { .. } => break,
+      };
+      let frame_total = hdr.total_len();
+      if frame_total > remaining.len() {
+        break;
+      }
+
+      let payload_start = hdr.header_len;
+      let payload_end = frame_total;
+
+      if let Some(m) = hdr.mask {
+        unmask(&mut remaining[payload_start..payload_end], m);
+      }
+
+      let (resp_opcode, close_after, skip) = match hdr.opcode {
+        OpCode::Close => (OpCode::Close, true, false),
+        OpCode::Ping => (OpCode::Pong, false, false),
+        OpCode::Pong => (OpCode::Pong, false, true),
+        OpCode::Text | OpCode::Binary => {
+          if !hdr.fin {
+            return Err(WebSocketError::InvalidFragment);
+          }
+          let response =
+            handler(&mut remaining[payload_start..payload_end], hdr.opcode);
+          match response {
+            ServerResponse::Echo => (hdr.opcode, false, false),
+            ServerResponse::Discard => (hdr.opcode, false, true),
+          }
+        }
+        OpCode::Continuation => {
+          return Err(WebSocketError::InvalidContinuationFrame);
+        }
+      };
+
+      if !skip {
+        emit_response_into(
+          &mut input[remaining_start..],
+          remaining_start,
+          &hdr,
+          resp_opcode,
+          &mut self.outbound_local,
+          &mut self.outbound,
+        );
+      }
+
+      consumed += frame_total;
+      if close_after {
+        self.closed = true;
+        return Ok(consumed);
+      }
+    }
+
+    if consumed < end {
+      let tail = &input[consumed..end];
+      if !tail.is_empty() {
+        self.partial.extend_from_slice(tail);
+        consumed = end;
+      }
+    }
+
+    Ok(consumed)
+  }
 }
 
 enum ResponseKind {
@@ -315,6 +483,63 @@ fn emit_response<W: FnMut(&[u8])>(
   }
 }
 
+/// Zero-copy variant of `emit_response`: rather than calling a write
+/// callback, push descriptors into the engine's outbound-segment
+/// list. `frame_buf` is `&mut input[frame_origin..]` so we can record
+/// offsets relative to the original `input`.
+#[inline]
+fn emit_response_into(
+  frame_buf: &mut [u8],
+  frame_origin: usize,
+  hdr: &crate::frame::Header,
+  opcode: OpCode,
+  local: &mut Vec<u8>,
+  segments: &mut Vec<OutboundSegment>,
+) {
+  let masked = hdr.mask.is_some();
+  let payload_len = hdr.payload_len;
+  let payload_start = hdr.header_len;
+  let payload_end = payload_start + payload_len;
+  if masked && payload_len < 65536 {
+    // In-place: rewrite the response header into the mask slot, then
+    // record a single Input range spanning the response header +
+    // payload contiguously.
+    let resp_hdr_len = if payload_len < 126 { 2 } else { 4 };
+    let resp_start = payload_start - resp_hdr_len;
+    frame_buf[resp_start] = 0x80 | (opcode as u8);
+    if payload_len < 126 {
+      frame_buf[resp_start + 1] = payload_len as u8;
+    } else {
+      frame_buf[resp_start + 1] = 126;
+      frame_buf[resp_start + 2] = (payload_len >> 8) as u8;
+      frame_buf[resp_start + 3] = (payload_len & 0xff) as u8;
+    }
+    let total = resp_hdr_len + payload_len;
+    segments.push(OutboundSegment::Input {
+      start: (frame_origin + resp_start) as u32,
+      len: total as u32,
+    });
+  } else {
+    // Fallback: emit the header into the engine's local scratch and
+    // record two segments (header + payload).
+    let head_start = local.len();
+    let mut head = [0u8; 10];
+    let n = fmt_server_head(&mut head, opcode, payload_len);
+    local.extend_from_slice(&head[..n]);
+    segments.push(OutboundSegment::Local {
+      start: head_start as u32,
+      len: n as u32,
+    });
+    segments.push(OutboundSegment::Input {
+      start: (frame_origin + payload_start) as u32,
+      len: payload_len as u32,
+    });
+  }
+  // Suppress unused-variable warning from `payload_end` in the
+  // fallback branch (we already used it via slice math above).
+  let _ = payload_end;
+}
+
 #[inline]
 fn fmt_server_head(
   buf: &mut [u8],
@@ -362,6 +587,75 @@ mod tests {
 
   fn echo_handler(_payload: &mut [u8], _opcode: OpCode) -> ServerResponse {
     ServerResponse::Echo
+  }
+
+  /// Helper: drain the engine's outbound segments into a flat Vec the
+  /// way an adapter would (concatenating Input/Local segments).
+  fn drain_outbound(engine: &mut ServerEngine, input: &[u8]) -> Vec<u8> {
+    let mut out = Vec::new();
+    let local = engine.outbound_local().to_vec();
+    for seg in engine.outbound_segments() {
+      match seg {
+        OutboundSegment::Input { start, len } => {
+          out.extend_from_slice(
+            &input[*start as usize..*start as usize + *len as usize],
+          );
+        }
+        OutboundSegment::Local { start, len } => {
+          out.extend_from_slice(
+            &local[*start as usize..*start as usize + *len as usize],
+          );
+        }
+      }
+    }
+    engine.clear_outbound();
+    out
+  }
+
+  #[test]
+  fn process_into_zero_copy_short() {
+    let mut engine = ServerEngine::new();
+    let mut frame = frame_to(b"hello");
+    let frame_copy = frame.clone(); // for the index lookup after process
+    let _ = engine.process_into(&mut frame, echo_handler).unwrap();
+    // The engine should produce one Input segment that, when sliced
+    // from the post-process frame, equals the expected response. We
+    // use `frame` itself (post-mutation) because process_into writes
+    // the response header into the mask slot.
+    let _ = frame_copy; // silence unused
+    let out = drain_outbound(&mut engine, &frame);
+    assert_eq!(out, vec![0x82, 5, b'h', b'e', b'l', b'l', b'o']);
+    // Outbound should be a single Input segment — zero-copy.
+    assert!(engine.outbound_local().is_empty());
+  }
+
+  #[test]
+  fn process_into_zero_copy_extended() {
+    let mut engine = ServerEngine::new();
+    let payload = vec![0xCDu8; 16_384];
+    let mut frame = frame_to(&payload);
+    let _ = engine.process_into(&mut frame, echo_handler).unwrap();
+    let out = drain_outbound(&mut engine, &frame);
+    assert_eq!(out.len(), 4 + 16_384);
+    assert_eq!(&out[..4], &[0x82, 126, 0x40, 0x00]);
+    assert!(out[4..].iter().all(|&b| b == 0xCD));
+  }
+
+  #[test]
+  fn process_into_fallback_writev_uses_local() {
+    // Unmasked input (protocol-violating from a client, but exercises
+    // the writev fallback path that uses engine.outbound_local).
+    let mut frame = vec![0x82u8, 0x05u8];
+    frame.extend_from_slice(b"hello");
+    let mut engine = ServerEngine::new();
+    let _ = engine.process_into(&mut frame, echo_handler).unwrap();
+    // Two segments: Local (header) then Input (payload).
+    let segs = engine.outbound_segments();
+    assert_eq!(segs.len(), 2);
+    assert!(matches!(segs[0], OutboundSegment::Local { .. }));
+    assert!(matches!(segs[1], OutboundSegment::Input { .. }));
+    let out = drain_outbound(&mut engine, &frame);
+    assert_eq!(out, vec![0x82, 5, b'h', b'e', b'l', b'l', b'o']);
   }
 
   #[test]

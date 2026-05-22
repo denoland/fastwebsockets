@@ -16,28 +16,29 @@
 //! framing. This is the "Deno-friendly" fast path: the I/O stays async
 //! (so it integrates with the surrounding tokio app), but the per-frame
 //! parse / unmask / response synthesis hot path runs synchronously
-//! inside `ServerEngine::process` — no `Future` state machine per frame,
-//! no `BytesMut::split_to`, no per-frame Arc atomic.
+//! inside `ServerEngine::process_into` — no `Future` state machine per
+//! frame, no `BytesMut::split_to`, no per-frame Arc atomic, and no
+//! adapter-side memcpy of the response payload thanks to the
+//! zero-copy outbound-segment API: the engine writes the response
+//! header into the same buffer the recv landed in, and reports the
+//! result as a list of byte ranges within that buffer. The adapter
+//! then drives `write_vectored` directly from the recv buffer.
 //!
-//! Runs the bench's standard upgrade dance via hyper, then hands the
-//! upgraded `TcpStream` to a tight async loop:
+//! Per-frame loop:
 //!
 //! ```text
 //!   loop {
-//!     n = stream.read(scratch).await?;          // 1 async await
-//!     engine.process(&mut scratch[..n], ...)?;  // sync — the hot path
-//!     stream.write_all(&wq).await?;             // 1 async await
+//!     n = stream.read(scratch).await?;                  // 1 async await
+//!     engine.process_into(&mut scratch[..n], handler)?; // sync
+//!     stream.write_all_vectored(&iovs).await?;          // 1 async await
+//!     engine.clear_outbound();
 //!   }
 //! ```
-//!
-//! The Engine writes outbound bytes into a per-connection `Vec<u8>`
-//! that we drain on every cycle. For the 16 KiB echo case this is one
-//! extra memcpy (engine→wq, ~3 µs at our measured 7 GB/s scalar path)
-//! vs the pure-mio path's "write straight from scratch"; in exchange
-//! the rest of the tokio app's existing async machinery composes
-//! cleanly.
+
+use std::io::IoSlice;
 
 use fastwebsockets::OpCode;
+use fastwebsockets::OutboundSegment;
 use fastwebsockets::ServerEngine;
 use fastwebsockets::ServerResponse;
 use http_body_util::Empty;
@@ -61,31 +62,110 @@ async fn echo_loop(mut stream: TcpStream) -> std::io::Result<()> {
   let _ = stream.set_nodelay(true);
   let mut engine = ServerEngine::new();
   let mut scratch = vec![0u8; SCRATCH_LEN];
-  let mut wq: Vec<u8> = Vec::with_capacity(SCRATCH_LEN);
   loop {
     let n = stream.read(&mut scratch).await?;
     if n == 0 {
       break;
     }
-    // engine.process is sync — the only async points in the per-frame
-    // loop are the read and write above/below.
-    let res = engine.process(
-      &mut scratch[..n],
-      |bytes| wq.extend_from_slice(bytes),
-      |_payload, opcode| match opcode {
+    let res =
+      engine.process_into(&mut scratch[..n], |_payload, opcode| match opcode {
         OpCode::Text | OpCode::Binary => ServerResponse::Echo,
         _ => ServerResponse::Discard,
-      },
-    );
+      });
     if res.is_err() {
       break;
     }
-    if !wq.is_empty() {
-      stream.write_all(&wq).await?;
-      wq.clear();
-    }
+    write_outbound(&mut stream, &engine, &scratch).await?;
+    engine.clear_outbound();
     if engine.is_closed() {
       break;
+    }
+  }
+  Ok(())
+}
+
+/// Build IoSlices from the engine's outbound segments and ship them
+/// through `write_vectored`. `Input` segments slice `scratch` directly
+/// (zero-copy); `Local` segments slice the engine's small header
+/// scratch.
+async fn write_outbound(
+  stream: &mut TcpStream,
+  engine: &ServerEngine,
+  scratch: &[u8],
+) -> std::io::Result<()> {
+  let segs = engine.outbound_segments();
+  if segs.is_empty() {
+    return Ok(());
+  }
+  let local = engine.outbound_local();
+
+  // We don't know how many iovecs we'll need; the bench's load_test
+  // delivers one frame per recv so usually just 1, occasionally 2.
+  // Build them on the stack with a small array; spill to a Vec only
+  // if there are more than `STACK_IOVS` segments in this batch.
+  const STACK_IOVS: usize = 16;
+  let mut stack: [std::mem::MaybeUninit<IoSlice<'_>>; STACK_IOVS] =
+    [const { std::mem::MaybeUninit::uninit() }; STACK_IOVS];
+  let mut spill: Vec<IoSlice<'_>>;
+  let iovs: &[IoSlice<'_>] = if segs.len() <= STACK_IOVS {
+    for (i, seg) in segs.iter().enumerate() {
+      let slice = match seg {
+        OutboundSegment::Input { start, len } => {
+          &scratch[*start as usize..*start as usize + *len as usize]
+        }
+        OutboundSegment::Local { start, len } => {
+          &local[*start as usize..*start as usize + *len as usize]
+        }
+      };
+      stack[i].write(IoSlice::new(slice));
+    }
+    // SAFETY: we just initialized stack[0..segs.len()].
+    unsafe {
+      std::slice::from_raw_parts(
+        stack.as_ptr() as *const IoSlice<'_>,
+        segs.len(),
+      )
+    }
+  } else {
+    spill = Vec::with_capacity(segs.len());
+    for seg in segs {
+      let slice = match seg {
+        OutboundSegment::Input { start, len } => {
+          &scratch[*start as usize..*start as usize + *len as usize]
+        }
+        OutboundSegment::Local { start, len } => {
+          &local[*start as usize..*start as usize + *len as usize]
+        }
+      };
+      spill.push(IoSlice::new(slice));
+    }
+    &spill
+  };
+
+  // Drain the iovs via repeated write_vectored. Each call may write
+  // fewer bytes than total; we re-slice and try again.
+  let mut total: usize = iovs.iter().map(|s| s.len()).sum();
+  let mut head = 0usize;
+  while total > 0 {
+    let n = stream.write_vectored(&iovs[head..]).await?;
+    if n == 0 {
+      return Err(std::io::ErrorKind::WriteZero.into());
+    }
+    total = total.saturating_sub(n);
+    if total == 0 {
+      break;
+    }
+    // Advance past fully-consumed iovecs.
+    let mut consumed = n;
+    while head < iovs.len() && consumed >= iovs[head].len() {
+      consumed -= iovs[head].len();
+      head += 1;
+    }
+    if head < iovs.len() && consumed > 0 {
+      // Partial iovec: fall back to write_all for the remainder.
+      stream.write_all(&iovs[head][consumed..]).await?;
+      total = total.saturating_sub(iovs[head].len() - consumed);
+      head += 1;
     }
   }
   Ok(())
@@ -97,36 +177,21 @@ async fn handle_client(
   let upgraded = fut.upgraded().await?;
   match upgraded.downcast::<TokioIo<TcpStream>>() {
     Ok(parts) => {
-      let stream = parts.io.into_inner();
-      // hyper may have already buffered a few bytes from the client; in
-      // the bench's ping-pong flow the first WebSocket frame doesn't
-      // arrive until after the upgrade response, so this is normally
-      // empty.
+      let mut stream = parts.io.into_inner();
+      // hyper occasionally has a tiny tail of bytes (post-handshake
+      // request bytes the client pipelined). Feed them to the engine
+      // before entering the steady-state loop.
       if !parts.read_buf.is_empty() {
-        // For the rare prefix case, feed those bytes to a one-shot
-        // engine call. Simpler than threading a prefix buffer through
-        // the loop.
         let mut engine = ServerEngine::new();
-        let mut scratch = parts.read_buf.to_vec();
-        let mut wq = Vec::new();
-        let _ = engine.process(
-          &mut scratch,
-          |b| wq.extend_from_slice(b),
-          |_, op| match op {
-            OpCode::Text | OpCode::Binary => ServerResponse::Echo,
-            _ => ServerResponse::Discard,
-          },
-        );
-        if !wq.is_empty() {
-          let mut stream = stream;
-          stream.write_all(&wq).await?;
-          echo_loop(stream).await?;
-        } else {
-          echo_loop(stream).await?;
-        }
-      } else {
-        echo_loop(stream).await?;
+        let mut prefix = parts.read_buf.to_vec();
+        let _ = engine.process_into(&mut prefix, |_, op| match op {
+          OpCode::Text | OpCode::Binary => ServerResponse::Echo,
+          _ => ServerResponse::Discard,
+        });
+        write_outbound(&mut stream, &engine, &prefix).await?;
+        engine.clear_outbound();
       }
+      echo_loop(stream).await?;
     }
     Err(_) => return Err("TLS / non-TCP upgrade not supported here".into()),
   }
