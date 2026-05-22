@@ -213,10 +213,11 @@ impl Reactor {
       std::io::Error::new(ErrorKind::InvalidInput, format!("{}", e))
     })?;
     let mut listener = TcpListener::bind(parsed)?;
-    self
-      .poll
-      .registry()
-      .register(&mut listener, LISTENER_TOKEN, Interest::READABLE)?;
+    self.poll.registry().register(
+      &mut listener,
+      LISTENER_TOKEN,
+      Interest::READABLE,
+    )?;
     self.listener = Some(listener);
     Ok(())
   }
@@ -329,10 +330,11 @@ impl Reactor {
           let entry = self.sessions.vacant_entry();
           let token = Token(entry.key() + 1);
           let mut session = Session::new(stream);
-          self
-            .poll
-            .registry()
-            .register(&mut session.stream, token, Interest::READABLE)?;
+          self.poll.registry().register(
+            &mut session.stream,
+            token,
+            Interest::READABLE,
+          )?;
           entry.insert(session);
         }
         Err(e) if e.kind() == ErrorKind::WouldBlock => return Ok(()),
@@ -365,11 +367,8 @@ impl Reactor {
       let _ = self.poll.registry().deregister(&mut session.stream);
       return;
     }
-    let _ = reregister_if_needed(
-      &mut self.sessions[idx],
-      &self.poll,
-      Token(idx + 1),
-    );
+    let _ =
+      reregister_if_needed(&mut self.sessions[idx], &self.poll, Token(idx + 1));
   }
 }
 
@@ -407,12 +406,8 @@ where
     resp.extend_from_slice(HANDSHAKE_RESPONSE_PREFIX);
     resp.extend_from_slice(&accept);
     resp.extend_from_slice(b"\r\n\r\n");
-    if write_now(
-      &mut session.stream,
-      &mut session.wq,
-      &[IoSlice::new(&resp)],
-    )
-    .is_err()
+    if write_now(&mut session.stream, &mut session.wq, &[IoSlice::new(&resp)])
+      .is_err()
     {
       return true;
     }
@@ -586,7 +581,10 @@ mod tests {
   #[test]
   fn double_crlf_locator() {
     assert_eq!(find_double_crlf(b"GET / HTTP/1.1\r\n\r\n"), Some(18));
-    assert_eq!(find_double_crlf(b"GET / HTTP/1.1\r\nHost: x\r\n\r\nrest"), Some(27));
+    assert_eq!(
+      find_double_crlf(b"GET / HTTP/1.1\r\nHost: x\r\n\r\nrest"),
+      Some(27)
+    );
     assert_eq!(find_double_crlf(b"GET / HTTP/1.1\r\n"), None);
     assert_eq!(find_double_crlf(b""), None);
   }
@@ -640,25 +638,27 @@ mod tests {
     let rc = unsafe {
       libc::socketpair(libc::AF_UNIX, libc::SOCK_STREAM, 0, fds.as_mut_ptr())
     };
-    assert_eq!(rc, 0, "socketpair failed: {}", std::io::Error::last_os_error());
+    assert_eq!(
+      rc,
+      0,
+      "socketpair failed: {}",
+      std::io::Error::last_os_error()
+    );
 
     // Move into std types so we can flip non-blocking + drop them
     // cleanly. Then convert the server side into a mio TcpStream by
     // way of its raw fd — mio's TcpStream is just a thin
     // non-blocking wrapper over the same fd kind.
     let server_fd = fds[0];
-    let mut client = unsafe { std::os::unix::net::UnixStream::from_raw_fd(fds[1]) };
+    let mut client =
+      unsafe { std::os::unix::net::UnixStream::from_raw_fd(fds[1]) };
 
     // Set both ends non-blocking.
     unsafe {
       let flags = libc::fcntl(server_fd, libc::F_GETFL);
       libc::fcntl(server_fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
       let flags = libc::fcntl(client.as_raw_fd(), libc::F_GETFL);
-      libc::fcntl(
-        client.as_raw_fd(),
-        libc::F_SETFL,
-        flags | libc::O_NONBLOCK,
-      );
+      libc::fcntl(client.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK);
     }
 
     let stream = unsafe { TcpStream::from_raw_fd(server_fd) };
@@ -673,12 +673,13 @@ mod tests {
     // client (the kernel may queue it instantly, but be generous).
     for _ in 0..4 {
       reactor
-        .run_once(Some(std::time::Duration::from_millis(50)), |_, op| {
-          match op {
+        .run_once(
+          Some(std::time::Duration::from_millis(50)),
+          |_, op| match op {
             OpCode::Text | OpCode::Binary => ServerResponse::Echo,
             _ => ServerResponse::Discard,
-          }
-        })
+          },
+        )
         .unwrap();
     }
 
