@@ -257,12 +257,23 @@ impl<'f> Frame<'f> {
     }
   }
 
-  /// Unmasks the frame payload in-place. This method does nothing if the frame is not masked.
+  /// Unmasks the frame payload in-place. This method does nothing if the
+  /// frame is not masked.
   ///
-  /// Note: By default, the frame payload is unmasked by `WebSocket::read_frame`.
+  /// After this call the frame is treated as unmasked: the `mask` field is
+  /// cleared so a subsequent [`Frame::fmt_head`] / writev path doesn't
+  /// re-emit the masking bits in the response header. This is the contract
+  /// you want for the typical server-side echo flow — read a masked frame
+  /// from the client, unmask, send it back unmodified — and it lets callers
+  /// pass the frame straight to `write_frame` without first reconstructing
+  /// it via `Frame::new`.
+  ///
+  /// Note: By default, the frame payload is unmasked by
+  /// `WebSocket::read_frame`.
   pub fn unmask(&mut self) {
     if let Some(mask) = self.mask {
       crate::mask::unmask(self.payload.to_mut(), mask);
+      self.mask = None;
     }
   }
 

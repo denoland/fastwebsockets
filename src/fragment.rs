@@ -222,7 +222,13 @@ impl Fragments {
           if self.fragments.is_some() {
             return Err(WebSocketError::InvalidFragment);
           }
-          return Ok(Some(Frame::new(true, frame.opcode, None, frame.payload)));
+          // The whole-message fast path: this is the common case for any
+          // non-fragmenting client and the steady-state of the bench.
+          // `ReadHalf::read_frame_inner` already called `frame.unmask()`
+          // which (since this PR) clears `frame.mask`, so the frame we got
+          // is already in the shape `Frame::new(true, opcode, None, ...)`
+          // would have produced. Pass it through instead of reconstructing.
+          return Ok(Some(frame));
         } else {
           self.fragments = match frame.opcode {
             OpCode::Text => match utf8::decode(&frame.payload) {
