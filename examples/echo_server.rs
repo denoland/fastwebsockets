@@ -45,9 +45,7 @@ where
   Ok(())
 }
 
-async fn handle_client(
-  fut: upgrade::UpgradeFut,
-) -> Result<(), WebSocketError> {
+async fn handle_client(fut: upgrade::UpgradeFut) -> Result<(), WebSocketError> {
   // Drive hyper's upgrade future, then downcast to the underlying TcpStream so
   // the steady-state echo loop runs without hyper's read-buffer + trait-object
   // indirection on every read/write.

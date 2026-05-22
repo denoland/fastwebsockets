@@ -930,11 +930,8 @@ mod tests {
     frame.extend_from_slice(&[0x82, 0x03, b'b', b'y', b'e']);
     // Empty back-end stream — all data lives in initial_buffer.
     let empty: Cursor<Vec<u8>> = Cursor::new(Vec::new());
-    let mut ws = WebSocket::after_handshake_with_buffer(
-      empty,
-      Role::Server,
-      &frame,
-    );
+    let mut ws =
+      WebSocket::after_handshake_with_buffer(empty, Role::Server, &frame);
     let f1 = ws.read_frame().await.unwrap();
     assert_eq!(&f1.payload[..], b"hi");
     let f2 = ws.read_frame().await.unwrap();

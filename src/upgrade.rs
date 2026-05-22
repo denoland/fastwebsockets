@@ -240,9 +240,7 @@ impl UpgradeFut {
   /// This lets callers downcast to the original transport (e.g. `TcpStream`)
   /// to skip hyper's read-buffer + trait-object indirection in their own
   /// echo/loop. Returns the upgraded I/O — wrap it however you like.
-  pub async fn upgraded(
-    self,
-  ) -> Result<hyper::upgrade::Upgraded, Error> {
+  pub async fn upgraded(self) -> Result<hyper::upgrade::Upgraded, Error> {
     let UpgradeFut { inner } = self;
     inner.await.map_err(Into::into)
   }

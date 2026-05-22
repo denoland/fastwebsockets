@@ -176,10 +176,7 @@ async fn echo_loop(
           }
           filled += n;
         }
-        (
-          4,
-          u16::from_be_bytes([buf[2], buf[3]]) as usize,
-        )
+        (4, u16::from_be_bytes([buf[2], buf[3]]) as usize)
       }
       127 => {
         while filled < 10 {
@@ -256,10 +253,8 @@ async fn echo_loop(
         if written < total {
           // Slow path for partial writes
           while written < head_n {
-            let iovs2 = [
-              IoSlice::new(&head[written..head_n]),
-              IoSlice::new(payload),
-            ];
+            let iovs2 =
+              [IoSlice::new(&head[written..head_n]), IoSlice::new(payload)];
             written += stream.write_vectored(&iovs2).await?;
           }
           if written < total {
