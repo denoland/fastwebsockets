@@ -12,15 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Minimal demo of the public [`fastwebsockets::reactor::Reactor`]
-//! API. Single-thread, single-CPU, no tokio: one event loop drives
-//! all accepted WebSocket sessions through `ServerEngine`.
+//! Bench-shape demo of [`fastwebsockets::reactor::Reactor`] —
+//! pure echo, the canonical perf comparison against uWebSockets.
+//! Calls the built-in [`Reactor::run_echo`] convenience; for a
+//! real-world handler with mutated frames / arbitrary sends /
+//! cross-thread `Sender`, see `examples/reactor_chat_broker.rs`.
 //!
-//! Equivalent to `examples/echo_server_mio.rs`, but implemented as a
-//! library consumer rather than as a hand-written mio loop — the
-//! ~400 lines of mio + handshake + framing dispatch in that example
-//! now collapse to the body of this one. The framing and event loop
-//! live in `crate::reactor`.
+//! Run with:
+//!
+//! ```text
+//!   FWS_ADDR=127.0.0.1:8080 cargo run --release \
+//!     --features reactor --example echo_server_reactor
+//! ```
 
 // Stub for non-Linux / non-reactor builds so `cargo build --examples`
 // still works on macOS / Windows.

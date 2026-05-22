@@ -35,12 +35,21 @@ name = "echo_server_tokio_fast"
 path = "examples/echo_server_tokio_fast.rs"
 required-features = ["upgrade"]
 
-# Minimal demo of the public `crate::reactor::Reactor` API. Single
-# event loop drives many sessions; no tokio, no per-connection task.
-# Linux-only.
+# Bench-shape demo of the public `crate::reactor::Reactor` API.
+# Pure echo via `Reactor::run_echo()`; this is the binary that the
+# uWebSockets head-to-head benchmark targets. Linux-only.
 [[example]]
 name = "echo_server_reactor"
 path = "examples/echo_server_reactor.rs"
+required-features = ["reactor"]
+
+# End-to-end demo of the `Reactor` general API: Handler trait
+# (on_open / on_frame / on_close), Connection.send / .close, and
+# the cross-thread Sender (queued commands + waker). Implements a
+# broadcast chat broker. Linux-only.
+[[example]]
+name = "reactor_chat_broker"
+path = "examples/reactor_chat_broker.rs"
 required-features = ["reactor"]
 
 [[example]]
