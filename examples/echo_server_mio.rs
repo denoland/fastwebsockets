@@ -205,21 +205,28 @@ mod linux {
   // Try to fill rbuf from the socket. Returns Ok(true) if the connection
   // reached EOF or errored and should be closed; Ok(false) if we should
   // continue.
+  //
+  // We do *one* `read` per event rather than looping until `WouldBlock`.
+  // On Linux loopback (the bench case) recv returns whatever the kernel
+  // has queued in one call — a 16 KiB frame typically arrives in one
+  // shot — so the trailing WouldBlock syscall is just waste. For tiny
+  // frames the savings are about one syscall per echo, ~30% of the
+  // syscall count at 100 conn / 20 B. With level-triggered epoll, if
+  // there's still data in the socket buffer after this read the next
+  // epoll_wait will return immediately for the same fd.
   fn pull_reads(conn: &mut Conn) -> std::io::Result<bool> {
-    loop {
-      let cap = BUF_LEN - conn.rlen;
-      if cap == 0 {
-        // Buffer full — caller hasn't drained yet.
-        return Ok(false);
+    let cap = BUF_LEN - conn.rlen;
+    if cap == 0 {
+      return Ok(false);
+    }
+    match conn.stream.read(&mut conn.rbuf[conn.rlen..]) {
+      Ok(0) => Ok(true),
+      Ok(n) => {
+        conn.rlen += n;
+        Ok(false)
       }
-      match conn.stream.read(&mut conn.rbuf[conn.rlen..]) {
-        Ok(0) => return Ok(true),
-        Ok(n) => {
-          conn.rlen += n;
-        }
-        Err(e) if e.kind() == ErrorKind::WouldBlock => return Ok(false),
-        Err(_) => return Ok(true),
-      }
+      Err(e) if e.kind() == ErrorKind::WouldBlock => Ok(false),
+      Err(_) => Ok(true),
     }
   }
 
