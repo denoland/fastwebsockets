@@ -118,9 +118,12 @@ fn main() -> Result<(), WebSocketError> {
   };
   let rt = builder.enable_io().build().unwrap();
 
+  let addr =
+    std::env::var("FWS_ADDR").unwrap_or_else(|_| "127.0.0.1:8080".to_string());
+
   rt.block_on(async move {
-    let listener = TcpListener::bind("127.0.0.1:8080").await?;
-    println!("Server started, listening on 127.0.0.1:8080");
+    let listener = TcpListener::bind(&addr).await?;
+    println!("Server started, listening on {}", addr);
     loop {
       let (stream, _) = listener.accept().await?;
       tokio::spawn(async move {

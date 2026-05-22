@@ -621,13 +621,15 @@ impl<'f, S> WebSocket<S> {
 
 const MAX_HEADER_SIZE: usize = 14;
 
-// Initial read-buffer capacity. Larger is better because it lets a single
-// `recv` drain whatever the kernel has queued for this socket, including
-// multiple pipelined frames. uWebSockets uses a 512 KiB shared recv buffer
-// for the same reason; per-connection buffers in tokio land amortize that
-// across the BytesMut allocation path. 64 KiB fits comfortably in L2 and
-// covers the 16 KiB-frame benchmark in a single read.
-const INITIAL_READ_BUFFER_CAPACITY: usize = 64 * 1024;
+// Initial read-buffer capacity. Kept at 8 KiB — the empirical sweet spot for
+// the bench matrix. I tried 64 KiB hoping to fit a 16 KiB frame + pipelined
+// headroom in a single `recv` (uWebSockets uses a 512 KiB *shared* recv
+// buffer for that reason), but per-connection 64 KiB buffers blew past L3
+// at 500 connections and regressed the 100/20 and 10/1024 cases by 3-7%
+// without moving the 200/16k case. 8 KiB amortizes well and the BytesMut
+// grows on demand for larger payloads via the `reserve` in
+// `parse_frame_header`.
+const INITIAL_READ_BUFFER_CAPACITY: usize = 8 * 1024;
 
 impl ReadHalf {
   pub fn after_handshake(role: Role) -> Self {
@@ -828,7 +830,12 @@ impl WriteHalf {
       auto_apply_mask: true,
       vectored: true,
       writev_threshold: 1024,
-      write_buffer: Vec::with_capacity(2),
+      // Pre-size the scratch buffer for the non-vectored write path so that
+      // the very first small-frame write doesn't trigger a Vec growth-loop
+      // (the original `Vec::with_capacity(2)` would realloc several times
+      // before settling). 1 KiB covers the writev_threshold-or-smaller frames
+      // that go through this branch.
+      write_buffer: Vec::with_capacity(1024),
     }
   }
 
