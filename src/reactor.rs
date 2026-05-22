@@ -177,6 +177,21 @@ struct Session {
   // Only non-empty during handshake; the steady-state framing path
   // is owned by `engine.partial_len()`.
   partial_handshake: Vec<u8>,
+  // Bytes leftover from an HTTP upgrade negotiated outside the
+  // reactor (e.g. by hyper, axum, or a custom HTTP layer) that
+  // were already pulled from the kernel buffer before the socket
+  // changed hands. Prepended to the first recv so the engine sees
+  // a continuous WebSocket stream. Only ever non-empty when the
+  // session was added via
+  // [`Reactor::add_session_with_prefix`](Reactor::add_session_with_prefix).
+  pending_prefix: Vec<u8>,
+  // True until [`Handler::on_open`] has fired for this session.
+  // Set on every newly created session and cleared on the first
+  // open-eligible event: handshake-just-completed (reactor-built-in
+  // upgrade), the first prefix-processing tick (`add_session_with_prefix`),
+  // or the first handle_readable for a pre-upgraded session
+  // (`add_session`).
+  needs_open: bool,
   // Pending bytes that the kernel send buffer couldn't absorb. Drained
   // on writable events.
   wq: VecDeque<u8>,
@@ -191,6 +206,8 @@ impl Session {
       stream,
       engine: ServerEngine::new(),
       partial_handshake: Vec::new(),
+      pending_prefix: Vec::new(),
+      needs_open: true,
       wq: VecDeque::new(),
       phase: Phase::Handshake,
       interest: Interest::READABLE,
@@ -199,13 +216,18 @@ impl Session {
 
   /// Construct a session for a socket that has already been upgraded
   /// at the HTTP layer by the caller. The reactor will not attempt to
-  /// parse a handshake on it.
-  fn from_upgraded(stream: TcpStream) -> Self {
+  /// parse a handshake on it. `prefix` is any bytes pulled from the
+  /// kernel buffer before the handoff (e.g. hyper's
+  /// `Parts::read_buf`); they are prepended to the next recv and
+  /// processed before any new socket data.
+  fn from_upgraded(stream: TcpStream, prefix: Vec<u8>) -> Self {
     let _ = stream.set_nodelay(true);
     Self {
       stream,
       engine: ServerEngine::new(),
       partial_handshake: Vec::new(),
+      pending_prefix: prefix,
+      needs_open: true,
       wq: VecDeque::new(),
       phase: Phase::Echoing,
       interest: Interest::READABLE,
@@ -549,7 +571,34 @@ impl Reactor {
   /// reactor (e.g. behind hyper / axum / a custom HTTP layer).
   pub fn add_session(
     &mut self,
+    stream: TcpStream,
+  ) -> std::io::Result<SessionId> {
+    self.add_session_with_prefix(stream, Vec::new())
+  }
+
+  /// Add an already-upgraded WebSocket stream plus any bytes that
+  /// were already pulled from its kernel buffer before the handoff.
+  ///
+  /// HTTP upgrade libraries (hyper, axum, …) typically deliver an
+  /// upgraded socket plus a leftover buffer of bytes that were
+  /// read past the HTTP request boundary. The first WebSocket
+  /// frame the client sent may be entirely inside that buffer (a
+  /// pipelined client), or straddle it; in either case those bytes
+  /// must be processed before any new socket read or the engine
+  /// will start reading mid-frame from the kernel.
+  ///
+  /// Pass `prefix` empty if you don't have any (equivalent to
+  /// [`add_session`](Self::add_session)).
+  ///
+  /// The prefix is processed on the next call to
+  /// [`run`](Self::run) / [`run_once`](Self::run_once) — the
+  /// reactor wakes itself via the cross-thread [`Sender`]'s
+  /// waker so the new session is picked up promptly even if no
+  /// other event source has fired.
+  pub fn add_session_with_prefix(
+    &mut self,
     mut stream: TcpStream,
+    prefix: Vec<u8>,
   ) -> std::io::Result<SessionId> {
     let entry = self.sessions.vacant_entry();
     let token = Token(entry.key() + 1);
@@ -557,7 +606,16 @@ impl Reactor {
       .poll
       .registry()
       .register(&mut stream, token, Interest::READABLE)?;
-    entry.insert(Session::from_upgraded(stream));
+    let has_prefix = !prefix.is_empty();
+    entry.insert(Session::from_upgraded(stream, prefix));
+    if has_prefix {
+      // Make sure the run loop ticks soon, even if no other event
+      // source has data. We piggy-back on the cross-thread waker
+      // (which is also what `Sender` uses); failing to wake here
+      // would leave the prefix unprocessed until the next event
+      // arrives on its own.
+      let _ = self.sender_inner.waker.wake();
+    }
     Ok(SessionId(token.0))
   }
 
@@ -604,6 +662,7 @@ impl Reactor {
         return Ok(());
       }
       self.drain_commands(handler);
+      self.process_pending_prefixes(handler);
       self.poll.poll(&mut self.events, None)?;
       // Take the events out so we don't hold an immutable borrow of
       // `self` across the per-event processing.
@@ -617,6 +676,7 @@ impl Reactor {
           self.accept_until_block(handler)?;
         } else if token == WAKER_TOKEN {
           self.drain_commands(handler);
+          self.process_pending_prefixes(handler);
         } else {
           self.process_event(event, handler);
         }
@@ -639,6 +699,7 @@ impl Reactor {
     handler: &mut H,
   ) -> std::io::Result<()> {
     self.drain_commands(handler);
+    self.process_pending_prefixes(handler);
     self.poll.poll(&mut self.events, timeout)?;
     let mut events = std::mem::replace(
       &mut self.events,
@@ -650,6 +711,7 @@ impl Reactor {
         self.accept_until_block(handler)?;
       } else if token == WAKER_TOKEN {
         self.drain_commands(handler);
+        self.process_pending_prefixes(handler);
       } else {
         self.process_event(event, handler);
       }
@@ -657,6 +719,47 @@ impl Reactor {
     events.clear();
     let _ = std::mem::replace(&mut self.events, events);
     Ok(())
+  }
+
+  /// Walk active sessions looking for ones that arrived with a
+  /// non-empty `pending_prefix` and drive the engine over those
+  /// bytes inline (no socket read). Called once at the top of each
+  /// run iteration and whenever the cross-thread waker fires, so a
+  /// freshly-added session's leftover bytes are visible to the
+  /// user handler before the reactor parks in `poll`. Iterates the
+  /// slab linearly because pending sessions are normally a small
+  /// minority of total sessions in steady state.
+  fn process_pending_prefixes<H: Handler>(&mut self, handler: &mut H) {
+    // Snapshot keys so we don't iterate while we may remove from
+    // the slab.
+    let keys: Vec<usize> = self
+      .sessions
+      .iter()
+      .filter_map(|(i, s)| (!s.pending_prefix.is_empty()).then_some(i))
+      .collect();
+    for idx in keys {
+      if !self.sessions.contains(idx) {
+        continue;
+      }
+      let session_id = SessionId(idx + 1);
+      let close = process_pending_prefix(
+        &mut self.sessions[idx],
+        session_id,
+        &mut self.scratch,
+        handler,
+      );
+      if close {
+        let mut s = self.sessions.remove(idx);
+        let _ = self.poll.registry().deregister(&mut s.stream);
+        handler.on_close(session_id);
+      } else {
+        let _ = reregister_if_needed(
+          &mut self.sessions[idx],
+          &self.poll,
+          Token(idx + 1),
+        );
+      }
+    }
   }
 
   /// Drain any commands posted via [`Sender`] and apply them to
@@ -789,18 +892,54 @@ fn handle_readable<H: Handler>(
   scratch: &mut [u8],
   handler: &mut H,
 ) -> bool {
-  let n = match session.stream.read(scratch) {
-    Ok(0) => return true,
+  // Drain any pending_prefix into the front of the recv scratch.
+  // For embedders that add an already-upgraded socket via
+  // `add_session_with_prefix`, those bytes were pulled from the
+  // kernel by the upstream HTTP layer; the engine has to see
+  // them before any bytes the socket still has buffered.
+  let prefix_len = if !session.pending_prefix.is_empty() {
+    let p = std::mem::take(&mut session.pending_prefix);
+    if p.len() > scratch.len() {
+      // Caller handed us more leftover bytes than scratch can
+      // hold in one go. The engine's own partial-frame buffer
+      // can absorb anything that doesn't fit in one call to
+      // `process`, so loop and feed slices of `scratch.len()`
+      // until exhausted. Rare; only relevant if the embedder
+      // passes a prefix larger than 64 KiB.
+      let mut left = p.as_slice();
+      while left.len() > scratch.len() {
+        scratch.copy_from_slice(&left[..scratch.len()]);
+        if process_buffered(session, session_id, scratch, handler).is_err()
+          || session.engine.is_closed()
+        {
+          return true;
+        }
+        left = &left[scratch.len()..];
+      }
+      let n = left.len();
+      scratch[..n].copy_from_slice(left);
+      n
+    } else {
+      scratch[..p.len()].copy_from_slice(&p);
+      p.len()
+    }
+  } else {
+    0
+  };
+
+  // Read what the kernel has on top of (after) the prefix.
+  let n = match session.stream.read(&mut scratch[prefix_len..]) {
+    Ok(0) if prefix_len == 0 => return true,
     Ok(n) => n,
     Err(e) if e.kind() == ErrorKind::WouldBlock => 0,
     Err(_) => return true,
   };
+  let n = prefix_len + n;
   if n == 0 {
     return false;
   }
 
   let mut read_pos: usize = 0;
-  let mut just_opened = false;
   if session.phase == Phase::Handshake {
     let Some(eom) = find_double_crlf(&scratch[..n]) else {
       session.partial_handshake.extend_from_slice(&scratch[..n]);
@@ -822,15 +961,14 @@ fn handle_readable<H: Handler>(
     }
     read_pos = eom;
     session.phase = Phase::Echoing;
-    just_opened = true;
   }
 
-  // Fire `on_open` for newly-upgraded sessions, including those
-  // handed in pre-upgraded via `add_session` (which start in
-  // `Phase::Echoing`). We don't track an explicit "open fired"
-  // flag — the first byte event after upgrade is "open" for the
-  // user's purposes.
-  if just_opened {
+  // Fire `on_open` once per session, regardless of whether the
+  // session arrived via the reactor's built-in handshake or via
+  // `add_session` / `add_session_with_prefix` from an external
+  // HTTP layer.
+  if session.needs_open {
+    session.needs_open = false;
     let mut out = Outbound::default();
     {
       let mut conn = Connection {
@@ -936,6 +1074,112 @@ fn fmt_server_head(
     buf[2..10].copy_from_slice(&(payload_len as u64).to_be_bytes());
     10
   }
+}
+
+/// Process `scratch[..scratch.len()]` as a chunk of pre-buffered
+/// bytes (no kernel read). Used by [`handle_readable`] when the
+/// caller-supplied prefix is larger than the scratch buffer can
+/// hold in one engine call. Returns Err if the engine signaled a
+/// protocol failure on the chunk.
+fn process_buffered<H: Handler>(
+  session: &mut Session,
+  session_id: SessionId,
+  scratch: &mut [u8],
+  handler: &mut H,
+) -> Result<(), ()> {
+  // Same dispatch shape as `handle_readable`'s engine call, minus
+  // the handshake leg (sessions that get a pending_prefix are
+  // always already in Phase::Echoing).
+  let stream_cell = std::cell::RefCell::new(&mut session.stream);
+  let wq_cell = std::cell::RefCell::new(&mut session.wq);
+  let mut process_close = false;
+  let result = session.engine.process(
+    scratch,
+    |bytes| {
+      let mut stream = stream_cell.borrow_mut();
+      let mut wq = wq_cell.borrow_mut();
+      let _ = write_contig_now(*stream, *wq, bytes);
+    },
+    |payload, opcode| {
+      let mut out = Outbound::default();
+      {
+        let mut conn = Connection {
+          id: session_id,
+          out: &mut out,
+        };
+        handler.on_frame(&mut conn, payload, opcode);
+      }
+      if !out.sends.is_empty() {
+        let mut stream = stream_cell.borrow_mut();
+        let mut wq = wq_cell.borrow_mut();
+        let _ = write_contig_now(*stream, *wq, &out.sends);
+      }
+      if out.close {
+        process_close = true;
+      }
+      if out.echo {
+        ServerResponse::Echo
+      } else {
+        ServerResponse::Discard
+      }
+    },
+  );
+  if process_close {
+    session.phase = Phase::Closed;
+  }
+  if result.is_err() {
+    Err(())
+  } else {
+    Ok(())
+  }
+}
+
+/// Walk a single session's pending_prefix through the engine. No
+/// kernel read; this is for sessions added via
+/// [`Reactor::add_session_with_prefix`] before the reactor has
+/// seen any event for them. Returns true if the session should be
+/// closed (engine error / Close frame seen).
+fn process_pending_prefix<H: Handler>(
+  session: &mut Session,
+  session_id: SessionId,
+  scratch: &mut [u8],
+  handler: &mut H,
+) -> bool {
+  let prefix = std::mem::take(&mut session.pending_prefix);
+  // Fire on_open on the first time we see the session, before the
+  // user sees any frames.
+  if session.needs_open {
+    session.needs_open = false;
+    let mut out = Outbound::default();
+    {
+      let mut conn = Connection {
+        id: session_id,
+        out: &mut out,
+      };
+      handler.on_open(&mut conn);
+    }
+    apply_outbound(session, &mut out);
+    if out.close {
+      session.phase = Phase::Closed;
+      return true;
+    }
+  }
+  // Run the prefix through the engine. Loop if it doesn't fit in
+  // one scratch.
+  let mut left = prefix.as_slice();
+  while !left.is_empty() {
+    let n = left.len().min(scratch.len());
+    scratch[..n].copy_from_slice(&left[..n]);
+    let chunk = &mut scratch[..n];
+    if process_buffered(session, session_id, chunk, handler).is_err() {
+      return true;
+    }
+    if session.engine.is_closed() || session.phase == Phase::Closed {
+      return true;
+    }
+    left = &left[n..];
+  }
+  false
 }
 
 fn drain_writes(session: &mut Session) -> std::io::Result<bool> {
@@ -1298,6 +1542,85 @@ mod tests {
     let mut buf = [0u8; 64];
     let n = client.read(&mut buf).unwrap();
     assert_eq!(&buf[..n], &[0x82, 4, b'p', b'o', b'n', b'g']);
+  }
+
+  /// `add_session_with_prefix` feeds caller-supplied leftover bytes
+  /// (e.g. hyper's `Parts::read_buf` after an HTTP upgrade) to the
+  /// engine before reading anything from the socket. The prefix
+  /// here contains a complete masked Binary frame, so the handler
+  /// fires once and the echo lands on the client side without any
+  /// new bytes ever crossing the socket.
+  #[test]
+  fn add_session_with_prefix_processes_leftover_bytes() {
+    use std::io::Read as _;
+    use std::os::fd::AsRawFd;
+    use std::os::fd::FromRawFd;
+
+    let mut fds: [libc::c_int; 2] = [-1, -1];
+    let rc = unsafe {
+      libc::socketpair(libc::AF_UNIX, libc::SOCK_STREAM, 0, fds.as_mut_ptr())
+    };
+    assert_eq!(rc, 0);
+    let server_fd = fds[0];
+    let mut client =
+      unsafe { std::os::unix::net::UnixStream::from_raw_fd(fds[1]) };
+    unsafe {
+      let f = libc::fcntl(server_fd, libc::F_GETFL);
+      libc::fcntl(server_fd, libc::F_SETFL, f | libc::O_NONBLOCK);
+      let f = libc::fcntl(client.as_raw_fd(), libc::F_GETFL);
+      libc::fcntl(client.as_raw_fd(), libc::F_SETFL, f | libc::O_NONBLOCK);
+    }
+    let stream = unsafe { TcpStream::from_raw_fd(server_fd) };
+
+    let prefix = mk_masked_binary(b"prefixed!");
+    let mut reactor = Reactor::new().unwrap();
+    let _id = reactor.add_session_with_prefix(stream, prefix).unwrap();
+
+    let mut h = handler_fn(|conn, _payload, _opcode| conn.echo());
+    tick(&mut reactor, &mut h);
+
+    let mut buf = [0u8; 64];
+    let n = client.read(&mut buf).unwrap();
+    assert_eq!(
+      &buf[..n],
+      &[0x82, 9, b'p', b'r', b'e', b'f', b'i', b'x', b'e', b'd', b'!']
+    );
+  }
+
+  /// `Handler::on_open` fires exactly once per session, before any
+  /// frames, for every session — including pre-upgraded sessions
+  /// supplied via `add_session` (no prefix, no handshake leg).
+  #[test]
+  fn on_open_fires_for_pre_upgraded_sessions() {
+    use std::io::Write as _;
+
+    let (mut reactor, mut client) = paired();
+    client.write_all(&mk_masked_binary(b"hi")).unwrap();
+
+    struct CountingHandler {
+      opens: usize,
+      frames: usize,
+    }
+    impl Handler for CountingHandler {
+      fn on_open(&mut self, _conn: &mut Connection<'_>) {
+        self.opens += 1;
+      }
+      fn on_frame(
+        &mut self,
+        _conn: &mut Connection<'_>,
+        _payload: &mut [u8],
+        _opcode: OpCode,
+      ) {
+        self.frames += 1;
+      }
+    }
+    let mut h = CountingHandler {
+      opens: 0,
+      frames: 0,
+    };
+    tick(&mut reactor, &mut h);
+    assert_eq!(h.opens, 1, "on_open should fire exactly once");
+    assert_eq!(h.frames, 1, "on_frame should see the one frame");
   }
 
   /// Cross-thread Sender close: posting `close` from outside the
