@@ -19,11 +19,20 @@ required-features = ["upgrade"]
 
 # mio-driven echo server (Linux only) — tests whether the single-thread
 # gap to uWebSockets is in WebSocket framing/parsing or in Tokio/futures
-# runtime overhead. Uses fastwebsockets::unmask for SIMD masking; the
-# rest is a hand-rolled event loop on `mio::Poll`.
+# runtime overhead. Uses fastwebsockets::ServerEngine for the framing.
 [[example]]
 name = "echo_server_mio"
 path = "examples/echo_server_mio.rs"
+required-features = ["upgrade"]
+
+# Tokio-based echo server using fastwebsockets::ServerEngine for the
+# per-frame hot path. Same async transport (TcpStream + hyper upgrade)
+# that the standard `echo_server` example uses, but the framing/unmask/
+# response synthesis runs synchronously inside the engine. This is the
+# "Deno-friendly" fast path.
+[[example]]
+name = "echo_server_tokio_fast"
+path = "examples/echo_server_tokio_fast.rs"
 required-features = ["upgrade"]
 
 [[example]]

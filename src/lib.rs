@@ -159,6 +159,7 @@ mod frame;
 #[cfg_attr(docsrs, doc(cfg(feature = "upgrade")))]
 pub mod handshake;
 mod mask;
+mod sync_server;
 /// HTTP upgrades.
 #[cfg(feature = "upgrade")]
 #[cfg_attr(docsrs, doc(cfg(feature = "upgrade")))]
@@ -187,6 +188,8 @@ pub use crate::frame::HeaderParse;
 pub use crate::frame::OpCode;
 pub use crate::frame::Payload;
 pub use crate::mask::unmask;
+pub use crate::sync_server::ServerEngine;
+pub use crate::sync_server::ServerResponse;
 
 #[derive(Copy, Clone, PartialEq)]
 pub enum Role {

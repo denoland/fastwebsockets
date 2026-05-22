@@ -67,10 +67,9 @@ mod linux {
   use mio::Poll;
   use mio::Token;
 
-  use fastwebsockets::parse_header;
-  use fastwebsockets::unmask;
-  use fastwebsockets::HeaderParse;
   use fastwebsockets::OpCode;
+  use fastwebsockets::ServerEngine;
+  use fastwebsockets::ServerResponse;
 
   const LISTENER: Token = Token(0);
 
@@ -100,7 +99,15 @@ mod linux {
   // buffer (stays hot in L2) plus the Conn struct itself (~64 bytes).
   struct Conn {
     stream: TcpStream,
-    partial: Vec<u8>,
+    // The library's framing engine. Owns partial-frame state, parse,
+    // unmask, in-place response synthesis. Replaces the inline parser
+    // the previous mio example carried; the per-connection state
+    // shrinks to just `stream + ServerEngine + wq + phase + interest`.
+    engine: ServerEngine,
+    // Bytes saved across a partial HTTP upgrade. Only non-empty if
+    // the upgrade request straddles two recvs; the WebSocket framing
+    // path doesn't use this — `engine.partial_len()` covers that.
+    partial_handshake: Vec<u8>,
     wq: VecDeque<u8>,
     phase: Phase,
     interest: Interest,
@@ -111,7 +118,8 @@ mod linux {
       let _ = stream.set_nodelay(true);
       Self {
         stream,
-        partial: Vec::new(),
+        engine: ServerEngine::new(),
+        partial_handshake: Vec::new(),
         wq: VecDeque::new(),
         phase: Phase::Handshake,
         interest: Interest::READABLE,
@@ -162,23 +170,6 @@ mod linux {
       start = line_end + 2;
     }
     None
-  }
-
-  #[inline]
-  fn fmt_server_head(buf: &mut [u8], opcode: u8, payload_len: usize) -> usize {
-    buf[0] = 0x80 | opcode;
-    if payload_len < 126 {
-      buf[1] = payload_len as u8;
-      2
-    } else if payload_len < 65536 {
-      buf[1] = 126;
-      buf[2..4].copy_from_slice(&(payload_len as u16).to_be_bytes());
-      4
-    } else {
-      buf[1] = 127;
-      buf[2..10].copy_from_slice(&(payload_len as u64).to_be_bytes());
-      10
-    }
   }
 
   // Returns true if the connection should be closed.
@@ -240,32 +231,32 @@ mod linux {
 
   // Drive the WebSocket framing on a connection that just had a readable
   // event. `scratch` is a shared buffer owned by the event loop and
-  // reused across every connection — we drain conn.partial into it,
-  // recv the rest, parse frames in place, write echoes, and save any
-  // unparsable tail back to conn.partial. This keeps the working set at
-  // one buffer in cache regardless of connection count.
+  // reused across every connection.
+  //
+  // The handshake is parsed inline (it's a one-shot per connection;
+  // not in the steady-state hot path). After that, the library's
+  // `ServerEngine::process` owns every byte of the framing path:
+  // parse, unmask, in-place response synthesis, and the
+  // ping/pong/close auto-responses.
   fn handle_readable(conn: &mut Conn, scratch: &mut [u8]) -> bool {
-    // Lay any saved tail at the front of the scratch buffer.
-    let mut filled = conn.partial.len();
-    if filled > 0 {
-      scratch[..filled].copy_from_slice(&conn.partial);
-      conn.partial.clear();
-    }
-
     // One recv per event (see the v5 commit message for why).
-    match conn.stream.read(&mut scratch[filled..]) {
+    let n = match conn.stream.read(&mut scratch[..]) {
       Ok(0) => return true,
-      Ok(n) => filled += n,
-      Err(e) if e.kind() == ErrorKind::WouldBlock => {}
+      Ok(n) => n,
+      Err(e) if e.kind() == ErrorKind::WouldBlock => 0,
       Err(_) => return true,
+    };
+    if n == 0 {
+      return false;
     }
+    let filled = n;
 
     let mut read_pos: usize = 0;
-
     if conn.phase == Phase::Handshake {
       let Some(eom) = find_double_crlf(&scratch[..filled]) else {
-        // Incomplete handshake — save what we have and try again later.
-        save_tail(conn, scratch, 0, filled);
+        // Incomplete handshake — the engine isn't engaged yet, save the
+        // bytes in the `Conn` for the next read.
+        conn.partial_handshake.extend_from_slice(&scratch[..filled]);
         return false;
       };
       let header = &scratch[..eom];
@@ -286,90 +277,31 @@ mod linux {
       conn.phase = Phase::Echoing;
     }
 
-    let mut head = [0u8; 10];
-    loop {
-      let avail = filled - read_pos;
-      if avail < 2 {
-        break;
-      }
-      let off = read_pos;
-      let hdr = match parse_header(&scratch[off..filled]) {
-        Ok(HeaderParse::Complete(h)) => h,
-        Ok(HeaderParse::Incomplete { .. }) => break,
-        Err(_) => return true,
-      };
-      let frame_total = hdr.total_len();
-      if frame_total > scratch.len() {
-        return true;
-      }
-      if avail < frame_total {
-        break;
-      }
-
-      let payload_start = off + hdr.header_len;
-      let payload_end = off + frame_total;
-
-      if let Some(m) = hdr.mask {
-        unmask(&mut scratch[payload_start..payload_end], m);
-      }
-
-      if !hdr.fin && hdr.opcode != OpCode::Continuation {
-        return true;
-      }
-
-      let opcode_byte = hdr.opcode as u8;
-      let resp_opcode = match hdr.opcode {
-        OpCode::Text | OpCode::Binary => 0x80 | opcode_byte,
-        OpCode::Ping => 0x8A,
-        OpCode::Close => 0x88,
-        _ => {
-          read_pos += frame_total;
-          continue;
-        }
-      };
-      let close_after = hdr.opcode == OpCode::Close;
-      let payload_len = hdr.payload_len;
-      let inplace_ok = hdr.mask.is_some() && payload_len < 65536;
-      if inplace_ok {
-        let resp_hdr_len = if payload_len < 126 { 2 } else { 4 };
-        let resp_start = payload_start - resp_hdr_len;
-        scratch[resp_start] = resp_opcode;
-        if payload_len < 126 {
-          scratch[resp_start + 1] = payload_len as u8;
-        } else {
-          scratch[resp_start + 1] = 126;
-          scratch[resp_start + 2] = (payload_len >> 8) as u8;
-          scratch[resp_start + 3] = (payload_len & 0xff) as u8;
-        }
-        let payload_total = resp_hdr_len + payload_len;
-        let bytes = &scratch[resp_start..resp_start + payload_total];
-        let _ = write_contig_now(&mut conn.stream, &mut conn.wq, bytes);
-      } else {
-        let n = fmt_server_head(&mut head, resp_opcode & 0x7f, payload_len);
-        let payload = &scratch[payload_start..payload_end];
-        let iovs = [IoSlice::new(&head[..n]), IoSlice::new(payload)];
-        let _ = write_now(&mut conn.stream, &mut conn.wq, &iovs);
-      }
-      if close_after {
-        return true;
-      }
-
-      read_pos += frame_total;
+    // The library owns the framing from here. The engine writes any
+    // outbound bytes (echoed payloads, auto-pongs, close echoes) to a
+    // closure that we route into the per-connection `wq` (which the
+    // outer event loop drains on writable events).
+    //
+    // The engine is told to operate on `scratch[read_pos..filled]`
+    // (the bytes the recv just delivered). On return, `_consumed` is
+    // how many of those bytes the engine parsed; whatever's left
+    // (incomplete frame tail) is buffered inside the engine itself.
+    let stream = &mut conn.stream;
+    let wq = &mut conn.wq;
+    let process_result = conn.engine.process(
+      &mut scratch[read_pos..filled],
+      |bytes| {
+        let _ = write_contig_now(stream, wq, bytes);
+      },
+      |_payload, opcode| match opcode {
+        OpCode::Text | OpCode::Binary => ServerResponse::Echo,
+        _ => ServerResponse::Discard,
+      },
+    );
+    if process_result.is_err() {
+      return true;
     }
-
-    save_tail(conn, scratch, read_pos, filled);
-    false
-  }
-
-  // Save the still-unparsed tail of the scratch buffer back to the
-  // connection. Empty on the common load_test case (one full frame per
-  // recv) — the Vec never grows.
-  #[inline]
-  fn save_tail(conn: &mut Conn, scratch: &[u8], start: usize, end: usize) {
-    if start == end {
-      return;
-    }
-    conn.partial.extend_from_slice(&scratch[start..end]);
+    conn.engine.is_closed()
   }
 
   // Single contiguous write — same partial-write handling as write_now
