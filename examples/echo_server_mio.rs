@@ -85,17 +85,21 @@ mod linux {
     Closed,
   }
 
+  // Per-connection state. The big 64 KiB recv buffer that v1..v8 kept here
+  // is gone — it now lives once in the event loop and is reused across
+  // every connection. The only per-conn read state is a small `partial`
+  // Vec that holds the tail of an incomplete frame when one TCP recv
+  // didn't deliver a whole frame; for the bench's ping-pong workload it's
+  // empty almost all the time and the Vec never allocates.
+  //
+  // 500 conns × 64 KiB was 32 MiB, past L3 on a 16 MiB Cascadelake. With
+  // a shared scratch, the working set during one event is one 64 KiB
+  // buffer (stays hot in L2) plus the Conn struct itself (~64 bytes).
   struct Conn {
     stream: TcpStream,
-    rbuf: Box<[u8; BUF_LEN]>,
-    rlen: usize, // bytes currently in rbuf
-    // Pending bytes we still owe to the socket. Anything that didn't fit in
-    // one writev call lands here and is drained the next time the socket
-    // becomes writable.
+    partial: Vec<u8>,
     wq: VecDeque<u8>,
     phase: Phase,
-    // Interest currently registered with the reactor — we only re-register
-    // when it actually changes (saves syscalls).
     interest: Interest,
   }
 
@@ -104,8 +108,7 @@ mod linux {
       let _ = stream.set_nodelay(true);
       Self {
         stream,
-        rbuf: Box::new([0u8; BUF_LEN]),
-        rlen: 0,
+        partial: Vec::new(),
         wq: VecDeque::new(),
         phase: Phase::Handshake,
         interest: Interest::READABLE,
@@ -191,45 +194,6 @@ mod linux {
     Ok(false)
   }
 
-  // Drop bytes [..n] of the read buffer by memmove. Called once per event
-  // after we've consumed whatever complete frames were in the buffer.
-  fn compact(conn: &mut Conn, consumed: usize) {
-    if consumed == conn.rlen {
-      conn.rlen = 0;
-      return;
-    }
-    conn.rbuf.copy_within(consumed..conn.rlen, 0);
-    conn.rlen -= consumed;
-  }
-
-  // Try to fill rbuf from the socket. Returns Ok(true) if the connection
-  // reached EOF or errored and should be closed; Ok(false) if we should
-  // continue.
-  //
-  // We do *one* `read` per event rather than looping until `WouldBlock`.
-  // On Linux loopback (the bench case) recv returns whatever the kernel
-  // has queued in one call — a 16 KiB frame typically arrives in one
-  // shot — so the trailing WouldBlock syscall is just waste. For tiny
-  // frames the savings are about one syscall per echo, ~30% of the
-  // syscall count at 100 conn / 20 B. With level-triggered epoll, if
-  // there's still data in the socket buffer after this read the next
-  // epoll_wait will return immediately for the same fd.
-  fn pull_reads(conn: &mut Conn) -> std::io::Result<bool> {
-    let cap = BUF_LEN - conn.rlen;
-    if cap == 0 {
-      return Ok(false);
-    }
-    match conn.stream.read(&mut conn.rbuf[conn.rlen..]) {
-      Ok(0) => Ok(true),
-      Ok(n) => {
-        conn.rlen += n;
-        Ok(false)
-      }
-      Err(e) if e.kind() == ErrorKind::WouldBlock => Ok(false),
-      Err(_) => Ok(true),
-    }
-  }
-
   // Try to write directly to the socket; if would-block, push what's left
   // onto the write queue and let the next writable event drain it.
   //
@@ -272,17 +236,36 @@ mod linux {
   }
 
   // Drive the WebSocket framing on a connection that just had a readable
-  // event. Parses as many complete frames as the buffer contains.
-  fn handle_readable(conn: &mut Conn) -> bool {
-    if pull_reads(conn).unwrap_or(true) {
-      return true;
+  // event. `scratch` is a shared buffer owned by the event loop and
+  // reused across every connection — we drain conn.partial into it,
+  // recv the rest, parse frames in place, write echoes, and save any
+  // unparsable tail back to conn.partial. This keeps the working set at
+  // one buffer in cache regardless of connection count.
+  fn handle_readable(conn: &mut Conn, scratch: &mut [u8]) -> bool {
+    // Lay any saved tail at the front of the scratch buffer.
+    let mut filled = conn.partial.len();
+    if filled > 0 {
+      scratch[..filled].copy_from_slice(&conn.partial);
+      conn.partial.clear();
     }
 
+    // One recv per event (see the v5 commit message for why).
+    match conn.stream.read(&mut scratch[filled..]) {
+      Ok(0) => return true,
+      Ok(n) => filled += n,
+      Err(e) if e.kind() == ErrorKind::WouldBlock => {}
+      Err(_) => return true,
+    }
+
+    let mut read_pos: usize = 0;
+
     if conn.phase == Phase::Handshake {
-      let Some(eom) = find_double_crlf(&conn.rbuf[..conn.rlen]) else {
+      let Some(eom) = find_double_crlf(&scratch[..filled]) else {
+        // Incomplete handshake — save what we have and try again later.
+        save_tail(conn, scratch, 0, filled);
         return false;
       };
-      let header = &conn.rbuf[..eom];
+      let header = &scratch[..eom];
       let Some(key) = find_header_value(header, b"Sec-WebSocket-Key") else {
         return true;
       };
@@ -296,18 +279,19 @@ mod linux {
       {
         return true;
       }
-      compact(conn, eom);
+      read_pos = eom;
       conn.phase = Phase::Echoing;
     }
 
-    // Parse as many complete frames as we have buffered.
     let mut head = [0u8; 10];
     loop {
-      if conn.rlen < 2 {
+      let avail = filled - read_pos;
+      if avail < 2 {
         break;
       }
-      let b0 = conn.rbuf[0];
-      let b1 = conn.rbuf[1];
+      let off = read_pos;
+      let b0 = scratch[off];
+      let b1 = scratch[off + 1];
       let fin = (b0 & 0x80) != 0;
       let opcode = b0 & 0x0f;
       let masked = (b1 & 0x80) != 0;
@@ -316,63 +300,62 @@ mod linux {
       let (header_size, payload_len): (usize, usize) = match len_code {
         0..=125 => (2, len_code as usize),
         126 => {
-          if conn.rlen < 4 {
+          if avail < 4 {
             break;
           }
-          (4, u16::from_be_bytes([conn.rbuf[2], conn.rbuf[3]]) as usize)
+          (
+            4,
+            u16::from_be_bytes([scratch[off + 2], scratch[off + 3]]) as usize,
+          )
         }
         127 => {
-          if conn.rlen < 10 {
+          if avail < 10 {
             break;
           }
           (
             10,
-            u64::from_be_bytes(conn.rbuf[2..10].try_into().unwrap()) as usize,
+            u64::from_be_bytes(scratch[off + 2..off + 10].try_into().unwrap())
+              as usize,
           )
         }
         _ => unreachable!(),
       };
       let mask_size = if masked { 4 } else { 0 };
       let total_header = header_size + mask_size;
-      if conn.rlen < total_header {
+      if avail < total_header {
         break;
       }
       let frame_total = total_header + payload_len;
-      if frame_total > conn.rbuf.len() {
+      if frame_total > scratch.len() {
+        // Pathologically large frame — clean shutdown.
         return true;
       }
-      if conn.rlen < frame_total {
+      if avail < frame_total {
         break;
       }
 
       let mask_bytes = if masked {
         let mut m = [0u8; 4];
-        m.copy_from_slice(&conn.rbuf[header_size..header_size + 4]);
+        m.copy_from_slice(&scratch[off + header_size..off + header_size + 4]);
         Some(m)
       } else {
         None
       };
 
       if let Some(m) = mask_bytes {
-        unmask(&mut conn.rbuf[total_header..frame_total], m);
+        unmask(&mut scratch[off + total_header..off + frame_total], m);
       }
 
       if !fin && opcode != 0 {
         return true;
       }
 
-      // In-place response synthesis: rewrite the response header into
-      // the mask slot (mask is already consumed by the in-place unmask
-      // above), then send `buf[mask_offset..frame_total]` as a single
-      // contiguous write — no writev, no scatter/gather. Only viable
-      // when the response header fits where the input mask sat (true
-      // for payload_len < 65 536; ext-127 needs 10 bytes vs mask's 4).
       let resp_opcode = match opcode {
         0x1 | 0x2 => 0x80 | opcode,
         0x9 => 0x8A,
         0x8 => 0x88,
         _ => {
-          compact(conn, frame_total);
+          read_pos += frame_total;
           continue;
         }
       };
@@ -380,39 +363,44 @@ mod linux {
       let inplace_ok = masked && payload_len < 65536;
       if inplace_ok {
         let resp_hdr_len = if payload_len < 126 { 2 } else { 4 };
-        let resp_start = total_header - resp_hdr_len;
-        conn.rbuf[resp_start] = resp_opcode;
+        let resp_start = off + total_header - resp_hdr_len;
+        scratch[resp_start] = resp_opcode;
         if payload_len < 126 {
-          conn.rbuf[resp_start + 1] = payload_len as u8;
+          scratch[resp_start + 1] = payload_len as u8;
         } else {
-          conn.rbuf[resp_start + 1] = 126;
-          conn.rbuf[resp_start + 2] = (payload_len >> 8) as u8;
-          conn.rbuf[resp_start + 3] = (payload_len & 0xff) as u8;
+          scratch[resp_start + 1] = 126;
+          scratch[resp_start + 2] = (payload_len >> 8) as u8;
+          scratch[resp_start + 3] = (payload_len & 0xff) as u8;
         }
         let payload_total = resp_hdr_len + payload_len;
-        let stream = &mut conn.stream;
-        let wq = &mut conn.wq;
-        let bytes = &conn.rbuf[resp_start..resp_start + payload_total];
-        let _ = write_contig_now(stream, wq, bytes);
-        if close_after {
-          return true;
-        }
+        let bytes = &scratch[resp_start..resp_start + payload_total];
+        let _ = write_contig_now(&mut conn.stream, &mut conn.wq, bytes);
       } else {
-        let Conn {
-          stream, rbuf, wq, ..
-        } = conn;
         let n = fmt_server_head(&mut head, resp_opcode & 0x7f, payload_len);
-        let payload = &rbuf[total_header..frame_total];
+        let payload = &scratch[off + total_header..off + frame_total];
         let iovs = [IoSlice::new(&head[..n]), IoSlice::new(payload)];
-        let _ = write_now(stream, wq, &iovs);
-        if close_after {
-          return true;
-        }
+        let _ = write_now(&mut conn.stream, &mut conn.wq, &iovs);
+      }
+      if close_after {
+        return true;
       }
 
-      compact(conn, frame_total);
+      read_pos += frame_total;
     }
+
+    save_tail(conn, scratch, read_pos, filled);
     false
+  }
+
+  // Save the still-unparsed tail of the scratch buffer back to the
+  // connection. Empty on the common load_test case (one full frame per
+  // recv) — the Vec never grows.
+  #[inline]
+  fn save_tail(conn: &mut Conn, scratch: &[u8], start: usize, end: usize) {
+    if start == end {
+      return;
+    }
+    conn.partial.extend_from_slice(&scratch[start..end]);
   }
 
   // Single contiguous write — same partial-write handling as write_now
@@ -460,7 +448,12 @@ mod linux {
     Ok(())
   }
 
-  fn process_event(conns: &mut slab::Slab<Conn>, poll: &Poll, event: &Event) {
+  fn process_event(
+    conns: &mut slab::Slab<Conn>,
+    poll: &Poll,
+    event: &Event,
+    scratch: &mut [u8],
+  ) {
     let token = event.token();
     let idx = token.0 - 1;
     if !conns.contains(idx) {
@@ -470,7 +463,7 @@ mod linux {
     {
       let conn = &mut conns[idx];
       if event.is_readable() {
-        close |= handle_readable(conn);
+        close |= handle_readable(conn, scratch);
       }
       if event.is_writable() && !close {
         close |= handle_writable(conn);
@@ -484,8 +477,6 @@ mod linux {
       let _ = poll.registry().deregister(&mut conn.stream);
       return;
     }
-    // Maybe-add WRITABLE interest if we still have queued writes; or drop
-    // it if we don't.
     let _ = reregister_if_needed(&mut conns[idx], poll, token);
   }
 
@@ -505,6 +496,10 @@ mod linux {
       listener.as_raw_fd()
     );
     let mut conns: slab::Slab<Conn> = slab::Slab::with_capacity(1024);
+    // One shared scratch buffer for *all* connections. Allocated once,
+    // reused for every readable event. Stays in cache because it's
+    // touched on every cycle.
+    let mut scratch: Box<[u8; BUF_LEN]> = Box::new([0u8; BUF_LEN]);
     loop {
       poll.poll(&mut events, None)?;
       for event in events.iter() {
@@ -533,7 +528,7 @@ mod linux {
             }
           }
         } else {
-          process_event(&mut conns, &poll, event);
+          process_event(&mut conns, &poll, event, scratch.as_mut_slice());
         }
       }
     }
