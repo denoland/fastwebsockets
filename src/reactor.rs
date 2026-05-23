@@ -131,6 +131,107 @@
 //! Full general-purpose server (broadcast broker) — see
 //! `examples/reactor_chat_broker.rs` for a runnable version that
 //! exercises [`Sender`] for cross-session fan-out.
+//!
+//! # Embedding from an HTTP server or runtime extension (e.g. Deno)
+//!
+//! The reactor is a *manager* primitive. The expected shape when
+//! plugging it into a larger stack (Deno's `ext/websocket`, an axum
+//! app, a custom HTTP gateway) is **not** "spawn the reactor as
+//! your whole server" — it is "keep the existing async HTTP /
+//! websocket path as the universal one, and hand only the eligible
+//! hot sessions to a dedicated reactor thread."
+//!
+//! For Deno specifically, today's path is
+//! `op_http_upgrade_websocket` → `extract_network_stream()` →
+//! `WebSocket::after_handshake(WebSocketStream::new(...))` → split
+//! into `FragmentCollectorRead` + `WebSocketWrite` behind
+//! `AsyncRefCell`, with JS pulling events via `op_ws_next_event` and
+//! pushing sends via separate ops. The reactor does not replace
+//! that path one-for-one — Deno's JS API is per-socket events over
+//! resource ids, while the reactor's whole point is "one event loop
+//! owns many fds." The integration is a side-by-side fast path, not
+//! a swap-in:
+//!
+//! 1. **Keep the existing Tokio `WebSocket<WebSocketStream>` path
+//!    as the default and universal path.** It handles TCP, TLS,
+//!    Unix, vsock, tunnel, HTTP/2, buffered upgrade bytes, and the
+//!    existing resource/op model. Do not break any of those by
+//!    routing them through the reactor.
+//! 2. **Add a Linux-only fast path for the common HTTP/1.1
+//!    upgraded plain TCP case**, behind a feature flag or runtime
+//!    experiment first. Only `NetworkStream::Tcp(stream)` is
+//!    eligible; TLS / H2 / Unix / vsock / tunnel and non-Linux
+//!    builds fall back to the existing path immediately.
+//! 3. **Move the upgraded socket into a reactor-backed manager.**
+//!    In `op_http_upgrade_websocket_next`, after
+//!    `extract_network_stream()` returns `(NetworkStream::Tcp(s),
+//!    Bytes)`, convert `s` to a `mio::net::TcpStream` and pass it
+//!    plus the buffered upgrade bytes to
+//!    [`Reactor::add_session_with_prefix`]. The prefix bytes
+//!    (whatever Hyper already drained from the kernel) are
+//!    processed through [`ServerEngine`] before the next socket
+//!    read, so no frame is lost on the seam.
+//! 4. **Run the reactor on a dedicated thread.** The
+//!    [`Reactor::run`] call does not return until all sessions and
+//!    senders are gone, so park it on its own
+//!    `std::thread::spawn`. Multiple manager threads (one reactor
+//!    each) is the right scaling strategy if one core saturates;
+//!    do not try to share a [`Reactor`] across threads.
+//! 5. **JS-facing ops route through channels, not direct calls.**
+//!    Keep `op_ws_next_event` / `op_ws_send_*` / `op_ws_close`
+//!    looking the same to JS. Under the hood:
+//!    - Each Deno resource holds an inbound `tokio::sync::mpsc`
+//!      receiver + a [`SessionId`] + a clone of the reactor's
+//!      [`Sender`].
+//!    - `next_event` awaits the inbound receiver.
+//!    - `send_*` calls [`Sender::send`] (which is sync and wakes
+//!      the reactor via `mio::Waker`).
+//!    - `close` calls [`Sender::close`].
+//!    The reactor-side [`Handler`] forwards each
+//!    [`Handler::on_frame`] / [`Handler::on_open`] /
+//!    [`Handler::on_close`] into the right resource's inbound
+//!    channel and never touches JS state directly.
+//! 6. **Fall back, never crash.** Anything the reactor cannot
+//!    handle (TLS, H2, Unix sockets, vsock, tunnel, non-Linux
+//!    builds, an upgrade buffer larger than your seam can carry,
+//!    a Deno permission that the reactor path can't observe yet)
+//!    should fall back to the existing `WebSocket<WebSocketStream>`
+//!    path. The reactor is an optimization, not a contract change.
+//!
+//! ## Perf caveat for runtime integrations
+//!
+//! If every received frame still crosses into JS one-by-one, a
+//! runtime-integrated benchmark will *not* reproduce the pure-Rust
+//! echo numbers in this PR's benchmark section. That is fine and
+//! expected: the value of the reactor in that setting is removing
+//! Tokio per-connection scheduling and per-frame `Future` overhead
+//! from the Rust side, not eliminating the cost of crossing the JS
+//! boundary. Bench the two layers separately — one Rust-only
+//! benchmark against the resource/queue manager shape, one full
+//! Deno benchmark against `Deno.serve()` — so the JS/op overhead
+//! is attributed to JS/ops and the Rust-side win is attributed to
+//! the reactor.
+//!
+//! ## Required surface, and where it lives
+//!
+//! Every piece a Deno-style embedder needs is already on the
+//! [`Reactor`] / [`Handler`] / [`Sender`] surface:
+//!
+//! | Need | API |
+//! |---|---|
+//! | Adopt an already-upgraded TCP socket | [`Reactor::add_session`] |
+//! | Preserve buffered upgrade bytes across the seam | [`Reactor::add_session_with_prefix`] |
+//! | Stable per-socket id for JS resources | [`SessionId`] (returned from both `add_session*`) |
+//! | Inbound event delivery | [`Handler::on_open`] / [`Handler::on_frame`] / [`Handler::on_close`] |
+//! | Outbound command path from another thread | [`Sender::send`] |
+//! | Close from another thread (also fires `on_close`) | [`Sender::close`] |
+//! | Wake the reactor from another thread | [`Sender`] is `mio::Waker`-backed; both `send` and `close` wake automatically |
+//! | Embed inside an existing event loop | [`Reactor::run_once`] |
+//!
+//! There is no extra API the embedder has to add. [`Reactor::run_echo`]
+//! is **not** the embedding entry point; it is the bench-shape demo
+//! that the headline single-core throughput numbers were taken
+//! against.
 
 use std::collections::VecDeque;
 use std::io::ErrorKind;
@@ -623,9 +724,18 @@ impl Reactor {
   /// Equivalent to calling [`run`](Self::run) with a handler that
   /// always calls [`Connection::echo`] on every data frame.
   ///
-  /// This is the bench-shape server in one call. Real applications
-  /// should use [`run`](Self::run) with their own [`Handler`]
-  /// implementation.
+  /// **This is a demo / benchmark entry point, not the embedding
+  /// API.** The headline single-core throughput numbers in this
+  /// crate's perf report are taken against this path because it
+  /// is the minimum work a reactor-driven WebSocket server can do.
+  /// Real applications — including HTTP-server / runtime-extension
+  /// embedders such as Deno — should use [`run`](Self::run) with
+  /// their own [`Handler`] implementation, route already-upgraded
+  /// sockets through [`add_session`](Self::add_session) /
+  /// [`add_session_with_prefix`](Self::add_session_with_prefix),
+  /// and post cross-thread sends through [`Sender`]. See the
+  /// "Embedding from an HTTP server or runtime extension" section
+  /// in the module-level docs.
   pub fn run_echo(&mut self) -> std::io::Result<()> {
     struct EchoHandler;
     impl Handler for EchoHandler {
