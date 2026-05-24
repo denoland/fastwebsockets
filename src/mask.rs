@@ -169,4 +169,33 @@ mod tests {
       assert_eq!(payload, expected);
     }
   }
+
+  #[test]
+  fn roundtrip_edge_cases() {
+    let mask = [0xAB, 0xCD, 0xEF, 0x12];
+    for &len in &[0, 1, 3, 7] {
+      let original: Vec<u8> =
+        (0..len).map(|i| (i as u8).wrapping_add(0x42)).collect();
+      let mut payload = original.clone();
+      unmask(&mut payload, mask);
+      unmask(&mut payload, mask);
+      assert_eq!(payload, original, "roundtrip failed for length {}", len);
+    }
+  }
+
+  #[test]
+  fn mask_key_indexing_rfc6455() {
+    // RFC 6455 §5.3: octet i of the payload is XORed with octet i mod 4 of the mask key
+    let mask = [0x01, 0x02, 0x03, 0x04];
+    let mut payload = vec![0xFF; 10];
+    unmask(&mut payload, mask);
+    for i in 0..10 {
+      assert_eq!(
+        payload[i],
+        0xFF ^ mask[i % 4],
+        "mask indexing mismatch at {}",
+        i
+      );
+    }
+  }
 }

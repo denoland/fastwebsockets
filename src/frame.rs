@@ -365,3 +365,71 @@ repr_u8! {
 pub fn is_control(opcode: OpCode) -> bool {
   matches!(opcode, OpCode::Close | OpCode::Ping | OpCode::Pong)
 }
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  fn parse_frame_header(
+    buf: &[u8],
+  ) -> (bool, OpCode, Option<[u8; 4]>, usize, usize) {
+    let fin = buf[0] & 0b10000000 != 0;
+    let opcode = OpCode::try_from(buf[0] & 0b00001111).unwrap();
+    let masked = buf[1] & 0b10000000 != 0;
+    let length_code = buf[1] & 0x7F;
+    let mut offset = 2;
+    let payload_len = match length_code {
+      126 => {
+        let len = u16::from_be_bytes([buf[2], buf[3]]) as usize;
+        offset = 4;
+        len
+      }
+      127 => {
+        let len =
+          u64::from_be_bytes(buf[2..10].try_into().unwrap()) as usize;
+        offset = 10;
+        len
+      }
+      n => n as usize,
+    };
+    let mask = if masked {
+      let m =
+        [buf[offset], buf[offset + 1], buf[offset + 2], buf[offset + 3]];
+      offset += 4;
+      Some(m)
+    } else {
+      None
+    };
+    (fin, opcode, mask, payload_len, offset)
+  }
+
+  #[test]
+  fn frame_roundtrip_at_125_126_boundary() {
+    for len in [125usize, 126] {
+      let original_payload: Vec<u8> =
+        (0..len).map(|i| (i % 256) as u8).collect();
+      let mut frame = Frame::text(original_payload.clone().into());
+      frame.mask();
+
+      let mut buf = Vec::new();
+      frame.write(&mut buf);
+
+      let (fin, opcode, mask, payload_len, offset) =
+        parse_frame_header(&buf);
+      assert!(fin);
+      assert_eq!(opcode, OpCode::Text);
+      assert!(mask.is_some());
+
+      let mut parsed_payload = buf[offset..offset + payload_len].to_vec();
+      crate::mask::unmask(&mut parsed_payload, mask.unwrap());
+      assert_eq!(parsed_payload, original_payload);
+
+      if len == 125 {
+        assert_eq!(buf[1] & 0x7F, 125);
+      } else {
+        assert_eq!(buf[1] & 0x7F, 126);
+        assert_eq!(payload_len, 126);
+      }
+    }
+  }
+}
