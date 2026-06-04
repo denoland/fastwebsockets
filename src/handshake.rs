@@ -97,9 +97,7 @@ where
   let (mut sender, conn) =
     hyper::client::conn::http1::handshake(TokioIo::new(socket)).await?;
   let fut = Box::pin(async move {
-    if let Err(e) = conn.with_upgrades().await {
-      eprintln!("Error polling connection: {}", e);
-    }
+    let _ = conn.with_upgrades().await;
   });
   executor.execute(fut);
 
