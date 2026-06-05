@@ -25,8 +25,7 @@ use hyper::Response;
 use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio_rustls::rustls;
-use tokio_rustls::rustls::Certificate;
-use tokio_rustls::rustls::PrivateKey;
+use tokio_rustls::rustls::pki_types::PrivateKeyDer;
 use tokio_rustls::TlsAcceptor;
 
 async fn handle_client(fut: upgrade::UpgradeFut) -> Result<()> {
@@ -66,18 +65,13 @@ fn tls_acceptor() -> Result<TlsAcceptor> {
   static KEY: &[u8] = include_bytes!("./localhost.key");
   static CERT: &[u8] = include_bytes!("./localhost.crt");
 
-  let mut keys: Vec<PrivateKey> =
-    rustls_pemfile::pkcs8_private_keys(&mut &*KEY)
-      .map(|mut certs| certs.drain(..).map(PrivateKey).collect())
-      .unwrap();
-  let certs = rustls_pemfile::certs(&mut &*CERT)
-    .map(|mut certs| certs.drain(..).map(Certificate).collect())
-    .unwrap();
-  dbg!(&certs);
+  let mut keys = rustls_pemfile::pkcs8_private_keys(&mut &*KEY)
+    .collect::<std::io::Result<Vec<_>>>()?;
+  let certs =
+    rustls_pemfile::certs(&mut &*CERT).collect::<std::io::Result<Vec<_>>>()?;
   let config = rustls::ServerConfig::builder()
-    .with_safe_defaults()
     .with_no_client_auth()
-    .with_single_cert(certs, keys.remove(0))?;
+    .with_single_cert(certs, PrivateKeyDer::Pkcs8(keys.remove(0)))?;
   Ok(TlsAcceptor::from(Arc::new(config)))
 }
 

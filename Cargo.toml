@@ -77,8 +77,8 @@ with_axum = ["axum-core", "http", "async-trait"]
 
 [dev-dependencies]
 tokio = { version = "1.25.0", features = ["full", "macros"] }
-tokio-rustls = "0.24.0"
-rustls-pemfile = "1.0"
+tokio-rustls = "0.26.0"
+rustls-pemfile = "2.2"
 hyper-util = { version = "0.1.0", features = ["tokio"] }
 http-body-util = { version = "0.1.0" }
 hyper = { version = "1", features = ["http1", "server", "client"] }
@@ -86,7 +86,7 @@ assert2 = "0.3.4"
 trybuild = "1.0.80"
 criterion = "0.4.0"
 anyhow = "1.0.71"
-webpki-roots = "0.23.0"
+webpki-roots = "1.0"
 bytes = "1.4.0"
 axum = "0.8.1"
 
