@@ -646,7 +646,7 @@ impl ReadHalf {
         (Ok(None), Some(Frame::pong(frame.payload)))
       }
       OpCode::Text => {
-        if frame.fin && !frame.is_utf8() {
+        if frame.fin && !frame.is_masked() && !frame.is_utf8() {
           (Err(WebSocketError::InvalidUTF8), None)
         } else {
           (Ok(Some(frame)), None)

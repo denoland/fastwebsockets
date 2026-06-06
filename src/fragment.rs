@@ -118,7 +118,8 @@ impl<'f, S> FragmentCollector<S> {
       if is_closed && frame.opcode != OpCode::Close {
         return Err(WebSocketError::ConnectionClosed);
       }
-      if let Some(frame) = self.fragments.accumulate(frame)? {
+      let manual_unmask = !self.read_half.auto_apply_mask;
+      if let Some(frame) = self.fragments.accumulate(frame, manual_unmask)? {
         return Ok(frame);
       }
     }
@@ -191,7 +192,8 @@ impl<'f, S> FragmentCollectorRead<S> {
       let Some(frame) = res? else {
         continue;
       };
-      if let Some(frame) = self.fragments.accumulate(frame)? {
+      let manual_unmask = !self.read_half.auto_apply_mask;
+      if let Some(frame) = self.fragments.accumulate(frame, manual_unmask)? {
         return Ok(frame);
       }
     }
@@ -214,7 +216,8 @@ impl Fragments {
 
   pub fn accumulate<'f>(
     &mut self,
-    frame: Frame<'f>,
+    mut frame: Frame<'f>,
+    manual_unmask: bool,
   ) -> Result<Option<Frame<'f>>, WebSocketError> {
     match frame.opcode {
       OpCode::Text | OpCode::Binary => {
@@ -222,8 +225,11 @@ impl Fragments {
           if self.fragments.is_some() {
             return Err(WebSocketError::InvalidFragment);
           }
-          return Ok(Some(Frame::new(true, frame.opcode, None, frame.payload)));
+          return Ok(Some(frame));
         } else {
+          if manual_unmask {
+            frame.unmask();
+          }
           self.fragments = match frame.opcode {
             OpCode::Text => match utf8::decode(&frame.payload) {
               Ok(text) => Some(Fragment::Text(None, text.as_bytes().to_vec())),
@@ -249,6 +255,9 @@ impl Fragments {
           return Err(WebSocketError::InvalidContinuationFrame);
         }
         Some(Fragment::Text(data, input)) => {
+          if manual_unmask {
+            frame.unmask();
+          }
           let mut tail = &frame.payload[..];
           if let Some(mut incomplete) = data.take() {
             if let Some((result, rest)) =
@@ -296,6 +305,9 @@ impl Fragments {
           }
         }
         Some(Fragment::Binary(data)) => {
+          if manual_unmask {
+            frame.unmask();
+          }
           data.extend_from_slice(&frame.payload);
           if frame.fin {
             return Ok(Some(Frame::new(

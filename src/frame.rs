@@ -261,9 +261,13 @@ impl<'f> Frame<'f> {
   ///
   /// Note: By default, the frame payload is unmasked by `WebSocket::read_frame`.
   pub fn unmask(&mut self) {
-    if let Some(mask) = self.mask {
+    if let Some(mask) = self.mask.take() {
       crate::mask::unmask(self.payload.to_mut(), mask);
     }
+  }
+
+  pub(crate) fn is_masked(&self) -> bool {
+    self.mask.is_some()
   }
 
   /// Formats the frame header into the head buffer. Returns the size of the length field.
