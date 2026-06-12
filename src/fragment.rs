@@ -27,7 +27,7 @@ use tokio::io::AsyncRead;
 use tokio::io::AsyncWrite;
 
 pub enum Fragment {
-  Text(Option<utf8::Incomplete>, Vec<u8>),
+  Text(Option<utf8::Incomplete>, Vec<u8>, usize),
   Binary(Vec<u8>),
 }
 
@@ -35,7 +35,7 @@ impl Fragment {
   /// Returns the payload of the fragment.
   fn take_buffer(self) -> Vec<u8> {
     match self {
-      Fragment::Text(_, buffer) => buffer,
+      Fragment::Text(_, buffer, _) => buffer,
       Fragment::Binary(buffer) => buffer,
     }
   }
@@ -118,7 +118,10 @@ impl<'f, S> FragmentCollector<S> {
       if is_closed && frame.opcode != OpCode::Close {
         return Err(WebSocketError::ConnectionClosed);
       }
-      if let Some(frame) = self.fragments.accumulate(frame)? {
+      if let Some(frame) = self
+        .fragments
+        .accumulate(frame, self.read_half.max_message_size)?
+      {
         return Ok(frame);
       }
     }
@@ -191,7 +194,10 @@ impl<'f, S> FragmentCollectorRead<S> {
       let Some(frame) = res? else {
         continue;
       };
-      if let Some(frame) = self.fragments.accumulate(frame)? {
+      if let Some(frame) = self
+        .fragments
+        .accumulate(frame, self.read_half.max_message_size)?
+      {
         return Ok(frame);
       }
     }
@@ -215,6 +221,7 @@ impl Fragments {
   pub fn accumulate<'f>(
     &mut self,
     frame: Frame<'f>,
+    max_message_size: usize,
   ) -> Result<Option<Frame<'f>>, WebSocketError> {
     match frame.opcode {
       OpCode::Text | OpCode::Binary => {
@@ -224,15 +231,23 @@ impl Fragments {
           }
           return Ok(Some(Frame::new(true, frame.opcode, None, frame.payload)));
         } else {
+          if frame.payload.len() >= max_message_size {
+            return Err(WebSocketError::FrameTooLarge);
+          }
           self.fragments = match frame.opcode {
             OpCode::Text => match utf8::decode(&frame.payload) {
-              Ok(text) => Some(Fragment::Text(None, text.as_bytes().to_vec())),
+              Ok(text) => Some(Fragment::Text(
+                None,
+                text.as_bytes().to_vec(),
+                frame.payload.len(),
+              )),
               Err(utf8::DecodeError::Incomplete {
                 valid_prefix,
                 incomplete_suffix,
               }) => Some(Fragment::Text(
                 Some(incomplete_suffix),
                 valid_prefix.as_bytes().to_vec(),
+                frame.payload.len(),
               )),
               Err(utf8::DecodeError::Invalid { .. }) => {
                 return Err(WebSocketError::InvalidUTF8);
@@ -248,7 +263,15 @@ impl Fragments {
         None => {
           return Err(WebSocketError::InvalidContinuationFrame);
         }
-        Some(Fragment::Text(data, input)) => {
+        Some(Fragment::Text(data, input, message_len)) => {
+          let new_message_len = message_len
+            .checked_add(frame.payload.len())
+            .ok_or(WebSocketError::FrameTooLarge)?;
+          if new_message_len >= max_message_size {
+            return Err(WebSocketError::FrameTooLarge);
+          }
+          *message_len = new_message_len;
+
           let mut tail = &frame.payload[..];
           if let Some(mut incomplete) = data.take() {
             if let Some((result, rest)) =
@@ -296,6 +319,14 @@ impl Fragments {
           }
         }
         Some(Fragment::Binary(data)) => {
+          let message_len = data
+            .len()
+            .checked_add(frame.payload.len())
+            .ok_or(WebSocketError::FrameTooLarge)?;
+          if message_len >= max_message_size {
+            return Err(WebSocketError::FrameTooLarge);
+          }
+
           data.extend_from_slice(&frame.payload);
           if frame.fin {
             return Ok(Some(Frame::new(
