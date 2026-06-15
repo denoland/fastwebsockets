@@ -334,17 +334,15 @@ impl<'f> Frame<'f> {
 
   /// Writes the frame to the buffer and returns a slice of the buffer containing the frame.
   pub fn write<'a>(&mut self, buf: &'a mut Vec<u8>) -> &'a [u8] {
-    fn reserve_enough(buf: &mut Vec<u8>, len: usize) {
-      if buf.len() < len {
-        buf.resize(len, 0);
-      }
-    }
     let len = self.payload.len();
-    reserve_enough(buf, len + MAX_HEAD_SIZE);
+    buf.clear();
+    buf.reserve(len + MAX_HEAD_SIZE);
 
-    let size = self.fmt_head(buf);
-    buf[size..size + len].copy_from_slice(&self.payload);
-    &buf[..size + len]
+    let mut head = [0u8; MAX_HEAD_SIZE];
+    let size = self.fmt_head(&mut head);
+    buf.extend_from_slice(&head[..size]);
+    buf.extend_from_slice(&self.payload);
+    &buf[..]
   }
 }
 

@@ -225,19 +225,23 @@ impl Fragments {
           return Ok(Some(Frame::new(true, frame.opcode, None, frame.payload)));
         } else {
           self.fragments = match frame.opcode {
-            OpCode::Text => match utf8::decode(&frame.payload) {
-              Ok(text) => Some(Fragment::Text(None, text.as_bytes().to_vec())),
-              Err(utf8::DecodeError::Incomplete {
-                valid_prefix,
-                incomplete_suffix,
-              }) => Some(Fragment::Text(
-                Some(incomplete_suffix),
-                valid_prefix.as_bytes().to_vec(),
-              )),
-              Err(utf8::DecodeError::Invalid { .. }) => {
-                return Err(WebSocketError::InvalidUTF8);
+            OpCode::Text => {
+              let mut buf: Vec<u8> = frame.payload.into();
+              match utf8::decode(&buf) {
+                Ok(_) => Some(Fragment::Text(None, buf)),
+                Err(utf8::DecodeError::Incomplete {
+                  valid_prefix,
+                  incomplete_suffix,
+                }) => {
+                  let valid_len = valid_prefix.len();
+                  buf.truncate(valid_len);
+                  Some(Fragment::Text(Some(incomplete_suffix), buf))
+                }
+                Err(utf8::DecodeError::Invalid { .. }) => {
+                  return Err(WebSocketError::InvalidUTF8);
+                }
               }
-            },
+            }
             OpCode::Binary => Some(Fragment::Binary(frame.payload.into())),
             _ => unreachable!(),
           };
