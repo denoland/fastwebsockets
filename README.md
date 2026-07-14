@@ -67,7 +67,7 @@ handshakes.
 This feature is powered by [hyper](https://docs.rs/hyper).
 
 ```rust
-use fastwebsockets::upgrade::upgrade;
+use fastwebsockets::upgrade;
 use hyper::{Request, body::{Incoming, Bytes}, Response};
 use http_body_util::Empty;
 use anyhow::Result;
@@ -109,7 +109,7 @@ async fn connect() -> Result<WebSocket<Upgraded>> {
     .header(CONNECTION, "upgrade")
     .header(
       "Sec-WebSocket-Key",
-      fastwebsockets::handshake::generate_key(),
+      handshake::generate_key(),
     )
     .header("Sec-WebSocket-Version", "13")
     .body(Empty::<Bytes>::new())?;
