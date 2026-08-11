@@ -714,14 +714,16 @@ impl ReadHalf {
       None
     };
 
-    if frame::is_control(opcode) && !fin {
-      return Err(WebSocketError::ControlFrameFragmented);
-    }
+    if frame::is_control(opcode) {
+      if !fin {
+        return Err(WebSocketError::ControlFrameFragmented);
+      }
 
-    if opcode == OpCode::Ping && payload_len > 125 {
-      return Err(WebSocketError::PingFrameTooLarge);
+      if payload_len > 125 {
+        return Err(WebSocketError::PingFrameTooLarge);
+      }
     }
-
+      
     if payload_len >= self.max_message_size {
       return Err(WebSocketError::FrameTooLarge);
     }
