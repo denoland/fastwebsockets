@@ -606,7 +606,7 @@ impl ReadHalf {
       Err(e) => return (Err(e), None),
     };
 
-    if self.role == Role::Server && self.auto_apply_mask {
+    if self.role == Role::Server {
       frame.unmask()
     };
 
