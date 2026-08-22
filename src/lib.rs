@@ -154,6 +154,10 @@ mod close;
 mod error;
 mod fragment;
 mod frame;
+
+mod extensions;
+mod permessage_deflate;
+
 /// Client handshake.
 #[cfg(feature = "upgrade")]
 #[cfg_attr(docsrs, doc(cfg(feature = "upgrade")))]
@@ -167,6 +171,8 @@ pub mod upgrade;
 use bytes::Buf;
 
 use bytes::BytesMut;
+use flate2::{Compress, Compression, Decompress, FlushCompress};
+
 #[cfg(feature = "unstable-split")]
 use std::future::Future;
 
@@ -174,6 +180,8 @@ use tokio::io::AsyncRead;
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWrite;
 use tokio::io::AsyncWriteExt;
+
+use permessage_deflate::PermessageDeflateWebSocketExtension;
 
 pub use crate::close::CloseCode;
 pub use crate::error::WebSocketError;
@@ -198,6 +206,11 @@ pub(crate) struct WriteHalf {
   auto_apply_mask: bool,
   writev_threshold: usize,
   write_buffer: Vec<u8>,
+
+  compressor: Compress,
+
+  permessage_deflate: bool,
+  use_context_takeover: bool,
 }
 
 pub(crate) struct ReadHalf {
@@ -208,6 +221,11 @@ pub(crate) struct ReadHalf {
   writev_threshold: usize,
   max_message_size: usize,
   buffer: BytesMut,
+
+  decompressor: flate2::Decompress,
+
+  permessage_deflate: bool,
+  use_context_takeover: bool,
 }
 
 #[cfg(feature = "unstable-split")]
@@ -386,14 +404,18 @@ impl<'f, S> WebSocket<S> {
   ///   Ok(())
   /// }
   /// ```
-  pub fn after_handshake(stream: S, role: Role) -> Self
+  pub fn after_handshake(
+    stream: S,
+    role: Role,
+    permessage_deflate: &Option<&PermessageDeflateWebSocketExtension>,
+  ) -> Self
   where
     S: AsyncRead + AsyncWrite + Unpin,
   {
     Self {
       stream,
-      write_half: WriteHalf::after_handshake(role),
-      read_half: ReadHalf::after_handshake(role),
+      write_half: WriteHalf::after_handshake(role, permessage_deflate),
+      read_half: ReadHalf::after_handshake(role, permessage_deflate),
     }
   }
 
@@ -574,8 +596,34 @@ impl<'f, S> WebSocket<S> {
 const MAX_HEADER_SIZE: usize = 14;
 
 impl ReadHalf {
-  pub fn after_handshake(role: Role) -> Self {
+  pub fn after_handshake(
+    role: Role,
+    permessage_deflate: &Option<&PermessageDeflateWebSocketExtension>,
+  ) -> Self {
     let buffer = BytesMut::with_capacity(8192);
+
+    let (permessage_deflate, (use_context_takeover, window_bits)) =
+      match permessage_deflate {
+        Some(permessage_deflate) => (
+          true,
+          match role {
+            Role::Client => (
+              permessage_deflate.server_context_takeover,
+              permessage_deflate.server_max_window_bits.unwrap_or(15),
+            ),
+            Role::Server => (
+              permessage_deflate.client_context_takeover,
+              permessage_deflate
+                .client_max_window_bits
+                .and_then(|value| value)
+                .unwrap_or(15),
+            ),
+          },
+        ),
+        None => (false, (false, 15)),
+      };
+
+    println!("READ: window_bits = {window_bits}");
 
     Self {
       role,
@@ -584,7 +632,12 @@ impl ReadHalf {
       auto_pong: true,
       writev_threshold: 1024,
       max_message_size: 64 << 20,
+
+      permessage_deflate,
+      use_context_takeover,
+
       buffer,
+      decompressor: Decompress::new_with_window_bits(false, window_bits),
     }
   }
 
@@ -609,6 +662,19 @@ impl ReadHalf {
     if self.role == Role::Server && self.auto_apply_mask {
       frame.unmask()
     };
+
+    if self.permessage_deflate {
+      if frame.compressed {
+        frame = match frame.inflate(&mut self.decompressor) {
+          Ok(frame) => frame,
+          Err(e) => return (Err(e), None),
+        };
+
+        if !self.use_context_takeover {
+          self.decompressor.reset(true);
+        }
+      }
+    }
 
     match frame.opcode {
       OpCode::Close if self.auto_close => {
@@ -675,7 +741,31 @@ impl ReadHalf {
     let rsv2 = self.buffer[0] & 0b00100000 != 0;
     let rsv3 = self.buffer[0] & 0b00010000 != 0;
 
-    if rsv1 || rsv2 || rsv3 {
+    let mut compressed = false;
+
+    // @TODO: FIX THIS
+    // Frame header layout (first byte)
+    //  0 1 2 3 4 5 6 7
+    // +-+-+-+-+-------+
+    // |F|R|R|R| opcode|
+    // |I|S|S|S|  (4)  |
+    // |N|V|V|V|       |
+    // | |1|2|3|       |
+    // +-+-+-+-+-------+
+    // FIN (bit 0): last fragment of the message.
+    // RSV1, RSV2, RSV3: reserved for extensions. By default (no extensions negotiated) they must all be zero.
+    //
+    // Key rules from RFC 7692:
+    // RSV1 is set only on the first frame of a message — i.e., on a frame that also has an opcode of text/binary
+    // (not a continuation frame). If the message is fragmented across multiple frames, the continuation frames
+    // (opcode 0) leave RSV1 unset; compression status applies to the whole message, not per-fragment.
+    // Control frames (ping/pong/close, opcodes 0x8–0xA) must never have RSV1 set — they're never compressed.
+    // If RSV1 is set but the extension wasn't negotiated, the receiver must fail the connection — it's a protocol
+    // error, not something to silently ignore.
+    // RSV2 and RSV3 remain available for other extensions and are unrelated to compression.
+    if self.permessage_deflate && rsv1 && !rsv2 && !rsv3 {
+      compressed = true;
+    } else if rsv1 || rsv2 || rsv3 {
       return Err(WebSocketError::ReservedBitsNotZero);
     }
 
@@ -734,13 +824,36 @@ impl ReadHalf {
 
     // if we read too much it will stay in the buffer, for the next call to this method
     let payload = self.buffer.split_to(payload_len);
-    let frame = Frame::new(fin, opcode, mask, Payload::Bytes(payload));
+    let frame =
+      Frame::new(fin, opcode, mask, Payload::Bytes(payload), compressed);
     Ok(frame)
   }
 }
 
 impl WriteHalf {
-  pub fn after_handshake(role: Role) -> Self {
+  pub fn after_handshake(
+    role: Role,
+    permessage_deflate: &Option<&PermessageDeflateWebSocketExtension>,
+  ) -> Self {
+    let (permessage_deflate, (use_context_takeover, window_bits)) =
+      match permessage_deflate {
+        Some(permessage_deflate) => (
+          true,
+          match role {
+            Role::Client => (
+              permessage_deflate.client_context_takeover,
+              permessage_deflate
+                .client_max_window_bits
+                .and_then(|value| value)
+                .unwrap_or(15),
+            ),
+            Role::Server => (permessage_deflate.server_context_takeover, 15),
+          },
+        ),
+        None => (false, (false, 15)),
+      };
+    println!("WRITE: window_bits = {window_bits}");
+
     Self {
       role,
       closed: false,
@@ -748,6 +861,13 @@ impl WriteHalf {
       vectored: true,
       writev_threshold: 1024,
       write_buffer: Vec::with_capacity(2),
+      compressor: Compress::new_with_window_bits(
+        Compression::default(),
+        false,
+        window_bits,
+      ),
+      permessage_deflate,
+      use_context_takeover,
     }
   }
 
@@ -760,6 +880,26 @@ impl WriteHalf {
   where
     S: AsyncWrite + Unpin,
   {
+    println!("opcode => {:?}", frame.opcode);
+
+    let can_compress = match frame.opcode {
+      OpCode::Continuation | OpCode::Text | OpCode::Binary => true,
+      OpCode::Close | OpCode::Ping | OpCode::Pong => false,
+    };
+
+    if can_compress && self.permessage_deflate {
+      frame = frame
+        .deflate(
+          &mut self.compressor,
+          if self.use_context_takeover {
+            FlushCompress::Sync
+          } else {
+            FlushCompress::Full
+          },
+        )
+        .expect("deflate fail");
+    }
+
     if self.role == Role::Client && self.auto_apply_mask {
       frame.mask();
     }

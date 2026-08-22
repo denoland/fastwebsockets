@@ -12,12 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use flate2::{Compress, Decompress, FlushCompress, FlushDecompress, Status};
 use tokio::io::AsyncWriteExt;
 
 use bytes::BytesMut;
 use core::ops::Deref;
 
 use crate::WebSocketError;
+
+const TRAILER: [u8; 4] = [0x00, 0x00, 0xff, 0xff];
 
 macro_rules! repr_u8 {
     ($(#[$meta:meta])* $vis:vis enum $name:ident {
@@ -136,6 +139,8 @@ pub struct Frame<'f> {
   mask: Option<[u8; 4]>,
   /// The payload of the frame.
   pub payload: Payload<'f>,
+  /// Is the frame payload compressed
+  pub compressed: bool,
 }
 
 const MAX_HEAD_SIZE: usize = 16;
@@ -147,12 +152,14 @@ impl<'f> Frame<'f> {
     opcode: OpCode,
     mask: Option<[u8; 4]>,
     payload: Payload<'f>,
+    compressed: bool,
   ) -> Self {
     Self {
       fin,
       opcode,
       mask,
       payload,
+      compressed,
     }
   }
 
@@ -167,6 +174,7 @@ impl<'f> Frame<'f> {
       opcode: OpCode::Text,
       mask: None,
       payload,
+      compressed: false,
     }
   }
 
@@ -179,6 +187,7 @@ impl<'f> Frame<'f> {
       opcode: OpCode::Binary,
       mask: None,
       payload,
+      compressed: false,
     }
   }
 
@@ -197,6 +206,7 @@ impl<'f> Frame<'f> {
       opcode: OpCode::Close,
       mask: None,
       payload: payload.into(),
+      compressed: false,
     }
   }
 
@@ -211,6 +221,7 @@ impl<'f> Frame<'f> {
       opcode: OpCode::Close,
       mask: None,
       payload,
+      compressed: false,
     }
   }
 
@@ -223,6 +234,7 @@ impl<'f> Frame<'f> {
       opcode: OpCode::Pong,
       mask: None,
       payload,
+      compressed: false,
     }
   }
 
@@ -235,6 +247,7 @@ impl<'f> Frame<'f> {
       opcode: OpCode::Ping,
       mask: None,
       payload,
+      compressed: false,
     }
   }
 
@@ -273,6 +286,11 @@ impl<'f> Frame<'f> {
   /// This method panics if the head buffer is not at least n-bytes long, where n is the size of the length field (0, 2, 4, or 10)
   pub fn fmt_head(&mut self, head: &mut [u8]) -> usize {
     head[0] = (self.fin as u8) << 7 | (self.opcode as u8);
+
+    if self.compressed {
+      head[0] |= 0b0100_0000; // rsv1
+      head[0] &= !(0b0010_0000 | 0b0001_0000); // rsv2 & rsv3
+    }
 
     let len = self.payload.len();
     let size = if len < 126 {
@@ -343,8 +361,153 @@ impl<'f> Frame<'f> {
     reserve_enough(buf, len + MAX_HEAD_SIZE);
 
     let size = self.fmt_head(buf);
+
+    println!("{}", hex::encode(self.payload.deref()));
+
     buf[size..size + len].copy_from_slice(&self.payload);
     &buf[..size + len]
+  }
+
+  pub fn deflate(
+    &self,
+    compressor: &mut Compress,
+    flush: FlushCompress,
+  ) -> Result<Self, WebSocketError> {
+    let payload = self.payload.to_vec();
+
+    let mut total_in = 0_usize;
+    let mut total_out = 0_usize;
+    let mut out: Vec<u8> = vec![0; payload.len()];
+
+    loop {
+      let out_space_before = out.len() - total_out;
+
+      let in_before = compressor.total_in();
+      let out_before = compressor.total_out();
+
+      let status = compressor
+        .compress(&payload[total_in..], &mut out[total_out..], flush)
+        .expect("compress failed");
+
+      if status != Status::Ok {
+        println!("deflate: status = {:?}", status);
+        return Err(WebSocketError::InvalidEncoding);
+      }
+
+      let bytes_consumed = (compressor.total_in() - in_before) as usize;
+      let bytes_written = (compressor.total_out() - out_before) as usize;
+
+      total_in += bytes_consumed;
+      total_out += bytes_written;
+
+      let output_was_full = bytes_written == out_space_before;
+
+      if output_was_full {
+        let new_len = out.len() + payload.len();
+        out.resize(new_len, 0);
+
+        continue;
+      }
+
+      if total_in >= payload.len() {
+        break;
+      }
+    }
+
+    out.truncate(total_out);
+
+    if self.fin {
+      out.truncate(out.len() - 4); // remove zlib trailer too
+    }
+
+    let payload = Payload::Owned(out);
+
+    Ok(Self {
+      fin: self.fin,
+      opcode: self.opcode,
+      mask: self.mask,
+      payload,
+      compressed: true,
+    })
+  }
+
+  pub fn inflate(
+    &self,
+    decompressor: &mut Decompress,
+  ) -> Result<Self, WebSocketError> {
+    println!(
+      "payload => {:?}",
+      hex::encode(&self.payload.to_vec().as_slice())
+    );
+
+    let mut payload = self.payload.to_vec();
+
+    if self.fin {
+      payload = [payload.as_slice(), &TRAILER].concat();
+    }
+
+    let max_output_size = usize::MAX;
+
+    let mut total_in = 0_usize;
+    let mut total_out = 0_usize;
+    let mut out: Vec<u8> =
+      vec![0; payload.len().saturating_mul(2).min(max_output_size)];
+
+    loop {
+      let in_before = decompressor.total_in();
+      let out_before = decompressor.total_out();
+
+      let status = decompressor
+        .decompress(
+          &payload[total_in..],
+          &mut out[total_out..],
+          if self.fin {
+            FlushDecompress::Sync
+          } else {
+            FlushDecompress::None
+          },
+        )
+        .expect("decompress error");
+
+      if status != flate2::Status::Ok {
+        println!("status = {:?}", status);
+
+        return Err(WebSocketError::InvalidEncoding);
+      }
+
+      let bytes_consumed = (decompressor.total_in() - in_before) as usize;
+      let bytes_written = (decompressor.total_out() - out_before) as usize;
+
+      total_in += bytes_consumed;
+      total_out += bytes_written;
+
+      let out_space_before = out.len() - total_out;
+
+      let output_was_full = bytes_written == out_space_before;
+
+      if output_was_full {
+        let new_len =
+          out.len() + payload.len().saturating_mul(2).min(max_output_size);
+        out.resize(new_len, 0);
+
+        continue;
+      }
+
+      if total_in >= payload.len() {
+        break;
+      }
+    }
+
+    out.truncate(total_out);
+    let payload = Payload::Owned(out);
+
+    Ok(Self {
+      fin: self.fin,
+      opcode: self.opcode,
+      mask: self.mask,
+      payload,
+      compressed: false,
+    })
   }
 }
 

@@ -241,7 +241,7 @@ impl Fragments {
               }
             }
           }
-          return Ok(Some(Frame::new(true, frame.opcode, None, frame.payload)));
+          return Ok(Some(Frame::new(true, frame.opcode, None, frame.payload, frame.compressed)));
         } else {
           if frame.payload.len() >= max_message_size {
             return Err(WebSocketError::FrameTooLarge);
@@ -327,6 +327,7 @@ impl Fragments {
               self.opcode,
               None,
               self.fragments.take().unwrap().take_buffer().into(),
+              false,
             )));
           }
         }
@@ -346,6 +347,7 @@ impl Fragments {
               self.opcode,
               None,
               self.fragments.take().unwrap().take_buffer().into(),
+              false,
             )));
           }
         }

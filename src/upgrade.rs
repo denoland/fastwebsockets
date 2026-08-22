@@ -33,9 +33,13 @@ use std::pin::Pin;
 use std::task::Context;
 use std::task::Poll;
 
-use crate::Role;
-use crate::WebSocket;
-use crate::WebSocketError;
+use crate::{
+  extensions::WebSocketExtensions,
+  permessage_deflate::{
+    PermessageDeflateWebSocketExtension, PERMESSAGE_DEFLATE,
+  },
+  Role, WebSocket, WebSocketError,
+};
 
 fn sec_websocket_protocol(key: &[u8]) -> String {
   let mut sha1 = Sha1::new();
@@ -49,21 +53,31 @@ type Error = WebSocketError;
 
 pub struct IncomingUpgrade {
   key: String,
+
+  permessage_deflate: bool,
+  use_client_context_takeover: bool,
+  use_server_context_takeover: bool,
+
   on_upgrade: hyper::upgrade::OnUpgrade,
 }
 
 impl IncomingUpgrade {
   pub fn upgrade(self) -> Result<(Response<Empty<Bytes>>, UpgradeFut), Error> {
-    let response = Response::builder()
+    todo!("IncomingUpgrade::upgrade");
+
+    let mut response_builder = Response::builder()
       .status(hyper::StatusCode::SWITCHING_PROTOCOLS)
       .header(hyper::header::CONNECTION, "upgrade")
       .header(hyper::header::UPGRADE, "websocket")
-      .header("Sec-WebSocket-Accept", self.key)
+      .header(hyper::header::SEC_WEBSOCKET_ACCEPT, self.key);
+
+    let response = response_builder
       .body(Empty::new())
       .expect("bug: failed to build response");
 
     let stream = UpgradeFut {
       inner: self.on_upgrade,
+      permessage_deflate: None,
     };
 
     Ok((response, stream))
@@ -81,13 +95,15 @@ where
     parts: &mut http::request::Parts,
     _state: &S,
   ) -> Result<Self, Self::Rejection> {
+    todo!("from_request_parts");
+
     let key = parts
       .headers
-      .get("Sec-WebSocket-Key")
+      .get(hyper::header::SEC_WEBSOCKET_KEY)
       .ok_or(hyper::StatusCode::BAD_REQUEST)?;
     if parts
       .headers
-      .get("Sec-WebSocket-Version")
+      .get(hyper::header::SEC_WEBSOCKET_VERSION)
       .map(|v| v.as_bytes())
       != Some(b"13")
     {
@@ -101,6 +117,9 @@ where
     Ok(Self {
       on_upgrade,
       key: sec_websocket_protocol(key.as_bytes()),
+      permessage_deflate: true,
+      use_client_context_takeover: true,
+      use_server_context_takeover: true,
     })
   }
 }
@@ -111,6 +130,8 @@ where
 pub struct UpgradeFut {
   #[pin]
   inner: hyper::upgrade::OnUpgrade,
+
+  permessage_deflate: Option<PermessageDeflateWebSocketExtension>,
 }
 
 /// Try to upgrade a received `hyper::Request` to a websocket connection.
@@ -130,27 +151,88 @@ pub struct UpgradeFut {
 pub fn upgrade<B>(
   mut request: impl std::borrow::BorrowMut<Request<B>>,
 ) -> Result<(Response<Empty<Bytes>>, UpgradeFut), Error> {
+  dbg!("UPGRADE");
+
   let request = request.borrow_mut();
 
   let key = request
     .headers()
-    .get("Sec-WebSocket-Key")
+    .get(hyper::http::header::SEC_WEBSOCKET_KEY)
     .ok_or(WebSocketError::MissingSecWebSocketKey)?;
   if request
     .headers()
-    .get("Sec-WebSocket-Version")
+    .get(hyper::http::header::SEC_WEBSOCKET_VERSION)
     .map(|v| v.as_bytes())
     != Some(b"13")
   {
     return Err(WebSocketError::InvalidSecWebsocketVersion);
   }
 
-  let response = Response::builder()
+  let mut permessage_deflate = None;
+
+  if let Some(extensions) = request
+    .headers()
+    .get(hyper::header::SEC_WEBSOCKET_EXTENSIONS)
+  {
+    println!("> {:?}", extensions);
+
+    let extensions = extensions
+      .to_str()
+      .map_err(|_| WebSocketError::InvalidSecWebSocketExtensions)?;
+    let exts = WebSocketExtensions::try_from(extensions)
+      .map_err(|_| WebSocketError::InvalidSecWebSocketExtensions)?;
+
+    for extension in exts.iter() {
+      match extension.name {
+        PERMESSAGE_DEFLATE => {
+          let params =
+            PermessageDeflateWebSocketExtension::try_from(&extension.params)
+              .map_err(|err| {
+                eprintln!("{:?}", err);
+                WebSocketError::InvalidSecWebSocketExtensions
+              })?;
+          println!("params = {:?}", params);
+
+          permessage_deflate = Some(params);
+        }
+        _ => {
+          eprintln!("unsupported extension {:?}", extension);
+        }
+      }
+    }
+
+    println!(">>> {:?}", exts);
+  }
+
+  let mut response_builder = Response::builder()
     .status(hyper::StatusCode::SWITCHING_PROTOCOLS)
     .header(hyper::header::CONNECTION, "upgrade")
-    .header(hyper::header::UPGRADE, "websocket")
+    .header(hyper::header::UPGRADE, "websocket");
+
+  if let Some(ref permessage_deflate) = permessage_deflate {
+    let mut extensions = vec![];
+    extensions.push("permessage-deflate");
+
+    if !permessage_deflate.server_context_takeover {
+      extensions.push("server_no_context_takeover");
+    }
+
+    if !permessage_deflate.client_context_takeover {
+      extensions.push("client_no_context_takeover");
+    }
+
+    response_builder = response_builder.header(
+      hyper::header::SEC_WEBSOCKET_EXTENSIONS,
+      // "permessage-deflate; server_no_context_takeover; client_no_context_takeover",
+      // "permessage-deflate",
+      // "permessage-deflate; client_no_context_takeover",
+      extensions.join(";"),
+    );
+  }
+
+  let response = response_builder
     .header(
-      "Sec-WebSocket-Accept",
+      hyper::header::SEC_WEBSOCKET_ACCEPT,
       &sec_websocket_protocol(key.as_bytes()),
     )
     .body(Empty::new())
@@ -158,6 +240,8 @@ pub fn upgrade<B>(
 
   let stream = UpgradeFut {
     inner: hyper::upgrade::on(request),
+
+    permessage_deflate,
   };
 
   Ok((response, stream))
@@ -222,13 +306,21 @@ impl std::future::Future for UpgradeFut {
 
   fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
     let this = self.project();
+
+    dbg!(&this.permessage_deflate);
+
     let upgraded = match this.inner.poll(cx) {
       Poll::Pending => return Poll::Pending,
       Poll::Ready(x) => x,
     };
+
+    let stream = upgraded?;
+    dbg!(&stream);
+
     Poll::Ready(Ok(WebSocket::after_handshake(
-      TokioIo::new(upgraded?),
+      TokioIo::new(stream),
       Role::Server,
+      &this.permessage_deflate.as_ref(),
     )))
   }
 }
