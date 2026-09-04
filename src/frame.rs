@@ -130,6 +130,7 @@ impl<'a, const N: usize> PartialEq<&'_ [u8; N]> for Payload<'a> {
 }
 
 /// Represents a WebSocket frame.
+#[derive(Debug)]
 pub struct Frame<'f> {
   /// Indicates if this is the final frame in a message.
   pub fin: bool,
@@ -288,8 +289,10 @@ impl<'f> Frame<'f> {
     head[0] = (self.fin as u8) << 7 | (self.opcode as u8);
 
     if self.compressed {
-      head[0] |= 0b0100_0000; // rsv1
-      head[0] &= !(0b0010_0000 | 0b0001_0000); // rsv2 & rsv3
+      if self.opcode != OpCode::Continuation {
+        head[0] |= 0b0100_0000; // rsv1
+        head[0] &= !(0b0010_0000 | 0b0001_0000); // rsv2 & rsv3
+      }
     }
 
     let len = self.payload.len();
@@ -362,8 +365,6 @@ impl<'f> Frame<'f> {
 
     let size = self.fmt_head(buf);
 
-    println!("{}", hex::encode(self.payload.deref()));
-
     buf[size..size + len].copy_from_slice(&self.payload);
     &buf[..size + len]
   }
@@ -390,7 +391,6 @@ impl<'f> Frame<'f> {
         .expect("compress failed");
 
       if status != Status::Ok {
-        println!("deflate: status = {:?}", status);
         return Err(WebSocketError::InvalidEncoding);
       }
 
@@ -435,11 +435,6 @@ impl<'f> Frame<'f> {
     &self,
     decompressor: &mut Decompress,
   ) -> Result<Self, WebSocketError> {
-    println!(
-      "payload => {:?}",
-      hex::encode(&self.payload.to_vec().as_slice())
-    );
-
     let mut payload = self.payload.to_vec();
 
     if self.fin {
@@ -461,17 +456,12 @@ impl<'f> Frame<'f> {
         .decompress(
           &payload[total_in..],
           &mut out[total_out..],
-          if self.fin {
-            FlushDecompress::Sync
-          } else {
-            FlushDecompress::None
-          },
-        )
-        .expect("decompress error");
+          FlushDecompress::Sync,
+        );
+
+      let status = status.expect("decompress error");
 
       if status != flate2::Status::Ok {
-        println!("status = {:?}", status);
-
         return Err(WebSocketError::InvalidEncoding);
       }
 
@@ -481,20 +471,16 @@ impl<'f> Frame<'f> {
       total_in += bytes_consumed;
       total_out += bytes_written;
 
-      let out_space_before = out.len() - total_out;
+      if total_in >= payload.len() {
+        break;
+      }
 
-      let output_was_full = bytes_written == out_space_before;
-
-      if output_was_full {
+      if out.len() == total_out {
         let new_len =
-          out.len() + payload.len().saturating_mul(2).min(max_output_size);
+          (out.len() + payload.len().saturating_mul(2)).min(max_output_size);
         out.resize(new_len, 0);
 
         continue;
-      }
-
-      if total_in >= payload.len() {
-        break;
       }
     }
 

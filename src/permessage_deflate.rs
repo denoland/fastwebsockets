@@ -14,7 +14,7 @@ pub enum PerMessageDeflateExtensionError {
 
 /// The permessage deflate extension as defined in [RFC 7692](https://datatracker.ietf.org/doc/rfc7692/).
 ///
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 #[cfg_attr(test, derive(PartialEq))]
 pub struct PermessageDeflateWebSocketExtension {
   pub(crate) server_context_takeover: bool,
@@ -26,12 +26,11 @@ pub struct PermessageDeflateWebSocketExtension {
   pub(crate) client_max_window_bits: Option<Option<u8>>,
 }
 
-pub const PERMESSAGE_DEFLATE: &str = "permessage-deflate";
-
-const SERVER_NO_CONTEXT_TAKEOVER: &str = "server_no_context_takeover";
-const CLIENT_NO_CONTEXT_TAKEOVER: &str = "client_no_context_takeover";
-const SERVER_MAX_WINDOW_BITS: &str = "server_max_window_bits";
-const CLIENT_MAX_WINDOW_BITS: &str = "client_max_window_bits";
+pub(crate) const PERMESSAGE_DEFLATE: &str = "permessage-deflate";
+pub(crate) const SERVER_NO_CONTEXT_TAKEOVER: &str = "server_no_context_takeover";
+pub(crate) const CLIENT_NO_CONTEXT_TAKEOVER: &str = "client_no_context_takeover";
+pub(crate) const SERVER_MAX_WINDOW_BITS: &str = "server_max_window_bits";
+pub(crate) const CLIENT_MAX_WINDOW_BITS: &str = "client_max_window_bits";
 
 impl Default for PermessageDeflateWebSocketExtension {
   fn default() -> Self {
@@ -49,9 +48,7 @@ impl<'a> TryFrom<&WebSocketExtensionParams<'a>>
 {
   type Error = PerMessageDeflateExtensionError;
 
-  fn try_from(
-    params: &WebSocketExtensionParams<'a>,
-  ) -> Result<Self, Self::Error> {
+  fn try_from(params: &WebSocketExtensionParams<'a>) -> Result<Self, Self::Error> {
     let mut ext_params = Self::default();
 
     for (param, value) in params {

@@ -105,14 +105,10 @@ where
   verify(&response)?;
 
   match hyper::upgrade::on(&mut response).await {
-    Ok(upgraded) => {
-      dbg!(&upgraded);
-
-      Ok((
-        WebSocket::after_handshake(TokioIo::new(upgraded), Role::Client, &None),
-        response,
-      ))
-    }
+    Ok(upgraded) => Ok((
+      WebSocket::after_handshake(TokioIo::new(upgraded), Role::Client, &None),
+      response,
+    )),
     Err(e) => Err(e.into()),
   }
 }

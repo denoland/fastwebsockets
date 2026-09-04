@@ -37,6 +37,8 @@ use crate::{
   extensions::WebSocketExtensions,
   permessage_deflate::{
     PermessageDeflateWebSocketExtension, PERMESSAGE_DEFLATE,
+    SERVER_NO_CONTEXT_TAKEOVER,
+    CLIENT_MAX_WINDOW_BITS,
   },
   Role, WebSocket, WebSocketError,
 };
@@ -151,8 +153,6 @@ pub struct UpgradeFut {
 pub fn upgrade<B>(
   mut request: impl std::borrow::BorrowMut<Request<B>>,
 ) -> Result<(Response<Empty<Bytes>>, UpgradeFut), Error> {
-  dbg!("UPGRADE");
-
   let request = request.borrow_mut();
 
   let key = request
@@ -174,8 +174,6 @@ pub fn upgrade<B>(
     .headers()
     .get(hyper::header::SEC_WEBSOCKET_EXTENSIONS)
   {
-    println!("> {:?}", extensions);
-
     let extensions = extensions
       .to_str()
       .map_err(|_| WebSocketError::InvalidSecWebSocketExtensions)?;
@@ -187,21 +185,14 @@ pub fn upgrade<B>(
         PERMESSAGE_DEFLATE => {
           let params =
             PermessageDeflateWebSocketExtension::try_from(&extension.params)
-              .map_err(|err| {
-                eprintln!("{:?}", err);
-                WebSocketError::InvalidSecWebSocketExtensions
-              })?;
-          println!("params = {:?}", params);
-
+              .map_err(|_| WebSocketError::InvalidSecWebSocketExtensions)?;
           permessage_deflate = Some(params);
         }
         _ => {
-          eprintln!("unsupported extension {:?}", extension);
+          return Err(WebSocketError::InvalidSecWebSocketExtensions);
         }
       }
     }
-
-    println!(">>> {:?}", exts);
   }
 
   let mut response_builder = Response::builder()
@@ -211,21 +202,32 @@ pub fn upgrade<B>(
 
   if let Some(ref permessage_deflate) = permessage_deflate {
     let mut extensions = vec![];
-    extensions.push("permessage-deflate");
+
+    extensions.push(PERMESSAGE_DEFLATE.to_string());
 
     if !permessage_deflate.server_context_takeover {
-      extensions.push("server_no_context_takeover");
+      extensions.push(SERVER_NO_CONTEXT_TAKEOVER.to_string());
+    }
+
+    if let Some(client_max_window_bits) = permessage_deflate.client_max_window_bits {
+      match client_max_window_bits {
+        Some(client_max_window_bits) => {
+          extensions.push(
+            format!("{}={}", CLIENT_MAX_WINDOW_BITS, client_max_window_bits)
+          );
+        }
+        None => {
+          extensions.push(format!("{}=15", CLIENT_MAX_WINDOW_BITS));
+        }
+      }
     }
 
     if !permessage_deflate.client_context_takeover {
-      extensions.push("client_no_context_takeover");
+      extensions.push(CLIENT_NO_CONTEXT_TAKEOVER.to_string());
     }
 
     response_builder = response_builder.header(
       hyper::header::SEC_WEBSOCKET_EXTENSIONS,
-      // "permessage-deflate; server_no_context_takeover; client_no_context_takeover",
-      // "permessage-deflate",
-      // "permessage-deflate; client_no_context_takeover",
       extensions.join(";"),
     );
   }
@@ -306,19 +308,12 @@ impl std::future::Future for UpgradeFut {
 
   fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
     let this = self.project();
-
-    dbg!(&this.permessage_deflate);
-
     let upgraded = match this.inner.poll(cx) {
       Poll::Pending => return Poll::Pending,
       Poll::Ready(x) => x,
     };
-
-    let stream = upgraded?;
-    dbg!(&stream);
-
     Poll::Ready(Ok(WebSocket::after_handshake(
-      TokioIo::new(stream),
+      TokioIo::new(upgraded?),
       Role::Server,
       &this.permessage_deflate.as_ref(),
     )))
