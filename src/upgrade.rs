@@ -36,9 +36,8 @@ use std::task::Poll;
 use crate::{
   extensions::WebSocketExtensions,
   permessage_deflate::{
-    PermessageDeflateWebSocketExtension, PERMESSAGE_DEFLATE,
-    SERVER_NO_CONTEXT_TAKEOVER,
-    CLIENT_MAX_WINDOW_BITS,
+    PermessageDeflateWebSocketExtension, CLIENT_MAX_WINDOW_BITS,
+    CLIENT_NO_CONTEXT_TAKEOVER, PERMESSAGE_DEFLATE, SERVER_NO_CONTEXT_TAKEOVER,
   },
   Role, WebSocket, WebSocketError,
 };
@@ -55,25 +54,16 @@ type Error = WebSocketError;
 
 pub struct IncomingUpgrade {
   key: String,
-
-  permessage_deflate: bool,
-  use_client_context_takeover: bool,
-  use_server_context_takeover: bool,
-
   on_upgrade: hyper::upgrade::OnUpgrade,
 }
 
 impl IncomingUpgrade {
   pub fn upgrade(self) -> Result<(Response<Empty<Bytes>>, UpgradeFut), Error> {
-    todo!("IncomingUpgrade::upgrade");
-
-    let mut response_builder = Response::builder()
+    let response = Response::builder()
       .status(hyper::StatusCode::SWITCHING_PROTOCOLS)
       .header(hyper::header::CONNECTION, "upgrade")
       .header(hyper::header::UPGRADE, "websocket")
-      .header(hyper::header::SEC_WEBSOCKET_ACCEPT, self.key);
-
-    let response = response_builder
+      .header(hyper::header::SEC_WEBSOCKET_ACCEPT, self.key)
       .body(Empty::new())
       .expect("bug: failed to build response");
 
@@ -209,12 +199,15 @@ pub fn upgrade<B>(
       extensions.push(SERVER_NO_CONTEXT_TAKEOVER.to_string());
     }
 
-    if let Some(client_max_window_bits) = permessage_deflate.client_max_window_bits {
+    if let Some(client_max_window_bits) =
+      permessage_deflate.client_max_window_bits
+    {
       match client_max_window_bits {
         Some(client_max_window_bits) => {
-          extensions.push(
-            format!("{}={}", CLIENT_MAX_WINDOW_BITS, client_max_window_bits)
-          );
+          extensions.push(format!(
+            "{}={}",
+            CLIENT_MAX_WINDOW_BITS, client_max_window_bits
+          ));
         }
         None => {
           extensions.push(format!("{}=15", CLIENT_MAX_WINDOW_BITS));

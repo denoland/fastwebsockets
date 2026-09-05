@@ -368,7 +368,10 @@ impl<'f> Frame<'f> {
     buf[size..size + len].copy_from_slice(&self.payload);
     &buf[..size + len]
   }
+}
 
+#[cfg(feature = "permessage-deflate")]
+impl<'f> Frame<'f> {
   pub fn deflate(
     &self,
     compressor: &mut Compress,
@@ -452,12 +455,11 @@ impl<'f> Frame<'f> {
       let in_before = decompressor.total_in();
       let out_before = decompressor.total_out();
 
-      let status = decompressor
-        .decompress(
-          &payload[total_in..],
-          &mut out[total_out..],
-          FlushDecompress::Sync,
-        );
+      let status = decompressor.decompress(
+        &payload[total_in..],
+        &mut out[total_out..],
+        FlushDecompress::Sync,
+      );
 
       let status = status.expect("decompress error");
 

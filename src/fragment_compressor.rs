@@ -3,7 +3,6 @@ use flate2::{Compress, CompressError, FlushCompress};
 /// The FragmentCompressor splits the given payload into fragmented compressed frames.
 pub struct FragmentCompressor<'a> {
   total_in: usize,
-  total_out: usize,
   done: bool,
   payload: &'a [u8],
   compress: &'a mut Compress,
@@ -18,7 +17,6 @@ impl<'a> FragmentCompressor<'a> {
     Self {
       done: false,
       total_in: 0,
-      total_out: 0,
       payload,
       compress,
       pending_tail: Vec::new(),

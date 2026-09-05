@@ -1,11 +1,6 @@
 use crate::extensions::WebSocketExtensionParams;
 
 #[derive(Debug)]
-enum WebSocketExtentionError {
-  Unknown,
-}
-
-#[derive(Debug)]
 #[cfg_attr(test, derive(PartialEq))]
 pub enum PerMessageDeflateExtensionError {
   InvalidParam,
@@ -27,8 +22,10 @@ pub struct PermessageDeflateWebSocketExtension {
 }
 
 pub(crate) const PERMESSAGE_DEFLATE: &str = "permessage-deflate";
-pub(crate) const SERVER_NO_CONTEXT_TAKEOVER: &str = "server_no_context_takeover";
-pub(crate) const CLIENT_NO_CONTEXT_TAKEOVER: &str = "client_no_context_takeover";
+pub(crate) const SERVER_NO_CONTEXT_TAKEOVER: &str =
+  "server_no_context_takeover";
+pub(crate) const CLIENT_NO_CONTEXT_TAKEOVER: &str =
+  "client_no_context_takeover";
 pub(crate) const SERVER_MAX_WINDOW_BITS: &str = "server_max_window_bits";
 pub(crate) const CLIENT_MAX_WINDOW_BITS: &str = "client_max_window_bits";
 
@@ -48,7 +45,9 @@ impl<'a> TryFrom<&WebSocketExtensionParams<'a>>
 {
   type Error = PerMessageDeflateExtensionError;
 
-  fn try_from(params: &WebSocketExtensionParams<'a>) -> Result<Self, Self::Error> {
+  fn try_from(
+    params: &WebSocketExtensionParams<'a>,
+  ) -> Result<Self, Self::Error> {
     let mut ext_params = Self::default();
 
     for (param, value) in params {

@@ -16,24 +16,20 @@
 use std::future::Future;
 use std::ops::Deref;
 
+use flate2::{Compress, Compression, Decompress};
+use tokio::io::{AsyncRead, AsyncWrite};
+
 use crate::error::WebSocketError;
 use crate::fragment_compressor::FragmentCompressor;
 use crate::frame::Frame;
 use crate::permessage_deflate::PermessageDeflateWebSocketExtension;
 use crate::OpCode;
-use crate::Payload;
 use crate::ReadHalf;
 use crate::Role;
 use crate::WebSocket;
 #[cfg(feature = "unstable-split")]
 use crate::WebSocketRead;
 use crate::WriteHalf;
-use flate2::Compress;
-use flate2::Compression;
-use flate2::Decompress;
-use flate2::FlushCompress;
-use tokio::io::AsyncRead;
-use tokio::io::AsyncWrite;
 
 pub enum Fragment {
   Text(Option<utf8::Incomplete>, Vec<u8>, usize),
@@ -102,34 +98,37 @@ impl<'f, S> FragmentCollector<S> {
     let (stream, read_half, write_half, permessage_deflate) =
       ws.into_parts_internal();
 
-    let (compressor, decompressor_window_bits)  = match permessage_deflate {
+    let (compressor, decompressor_window_bits) = match permessage_deflate {
       Some(ref permessage_deflate) => {
-        let (compressor_window_bits, decompressor_window_bits) = match read_half.role {
-          Role::Client => (
-            permessage_deflate.client_max_window_bits.unwrap_or(Some(15)),
-            permessage_deflate.server_max_window_bits,
-          ),
+        let (compressor_window_bits, decompressor_window_bits) =
+          match read_half.role {
+            Role::Client => (
+              permessage_deflate
+                .client_max_window_bits
+                .unwrap_or(Some(15)),
+              permessage_deflate.server_max_window_bits,
+            ),
 
-          Role::Server => (
-            permessage_deflate.server_max_window_bits,
-            permessage_deflate.client_max_window_bits.unwrap_or(Some(15)),
-          )
-        };
+            Role::Server => (
+              permessage_deflate.server_max_window_bits,
+              permessage_deflate
+                .client_max_window_bits
+                .unwrap_or(Some(15)),
+            ),
+          };
 
         let compressor_window_bits = compressor_window_bits.unwrap_or(15);
         let decompressor_window_bits = decompressor_window_bits.unwrap_or(15);
 
         (
-          Some(
-            Compress::new_with_window_bits(
-              Compression::default(),
-              false,
-              compressor_window_bits,
-            )
-          ),
-          Some(decompressor_window_bits)
+          Some(Compress::new_with_window_bits(
+            Compression::default(),
+            false,
+            compressor_window_bits,
+          )),
+          Some(decompressor_window_bits),
         )
-      },
+      }
       None => (None, None),
     };
 
@@ -150,13 +149,14 @@ impl<'f, S> FragmentCollector<S> {
   where
     S: AsyncRead + AsyncWrite + Unpin,
   {
-    let use_context_takeover = self.permessage_deflate.as_ref().map_or(
-      true,
-      |permessage_deflate| match self.write_half.role {
-        Role::Client => permessage_deflate.server_context_takeover,
-        Role::Server => permessage_deflate.client_context_takeover,
-      },
-    );
+    let use_context_takeover =
+      self
+        .permessage_deflate
+        .as_ref()
+        .map_or(true, |permessage_deflate| match self.write_half.role {
+          Role::Client => permessage_deflate.server_context_takeover,
+          Role::Server => permessage_deflate.client_context_takeover,
+        });
 
     loop {
       let (res, obligated_send) =
@@ -177,13 +177,6 @@ impl<'f, S> FragmentCollector<S> {
         .fragments
         .accumulate(frame, self.read_half.max_message_size)?
       {
-        match frame.opcode {
-          OpCode::Text => {
-            let s = String::from_utf8(frame.payload.to_vec()).unwrap();
-          }
-          _ => {}
-        }
-
         if !use_context_takeover {
           self.fragments.reset();
         }
@@ -210,15 +203,17 @@ impl<'f, S> FragmentCollector<S> {
 
     if can_compress && !frame.compressed {
       if let Some(compressor) = self.compressor.as_mut() {
-        let use_context_takeover = self.permessage_deflate.as_ref().map_or(
-          true,
-          |permessage_deflate| match self.write_half.role {
-            Role::Client => permessage_deflate.client_context_takeover,
-            Role::Server => permessage_deflate.server_context_takeover,
-          },
-        );
+        let use_context_takeover =
+          self
+            .permessage_deflate
+            .as_ref()
+            .map_or(true, |permessage_deflate| match self.write_half.role {
+              Role::Client => permessage_deflate.client_context_takeover,
+              Role::Server => permessage_deflate.server_context_takeover,
+            });
 
-        let mut fragment_compressor = FragmentCompressor::new(frame.payload.deref(), compressor);
+        let mut fragment_compressor =
+          FragmentCompressor::new(frame.payload.deref(), compressor);
 
         let mut first = true;
 
@@ -281,7 +276,7 @@ impl<'f, S> FragmentCollectorRead<S> {
     FragmentCollectorRead {
       stream,
       read_half,
-      fragments: Fragments::new(),
+      fragments: Fragments::new(None),
     }
   }
 
@@ -333,10 +328,9 @@ struct Fragments {
 
 impl Fragments {
   pub fn new(window_bits: Option<u8>) -> Self {
-    let decompressor =
-      window_bits.map(|window_bits: _| {
-        Decompress::new_with_window_bits(false, window_bits)
-      });
+    let decompressor = window_bits.map(|window_bits: _| {
+      Decompress::new_with_window_bits(false, window_bits)
+    });
 
     Self {
       fragments: None,
@@ -505,9 +499,9 @@ impl Fragments {
                 .inflate(self.decompressor.as_mut().unwrap())
                 .unwrap();
 
-              let Ok(text) = utf8::decode(&final_frame.payload[..]) else {
+              if utf8::decode(&final_frame.payload[..]).is_err() {
                 return Err(WebSocketError::InvalidUTF8);
-              };
+              }
               final_frame
             } else {
               final_frame

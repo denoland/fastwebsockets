@@ -254,7 +254,7 @@ where
   (
     WebSocketRead {
       stream: read,
-      read_half: ReadHalf::after_handshake(role),
+      read_half: ReadHalf::after_handshake(role, false),
     },
     WebSocketWrite {
       stream: write,
@@ -307,7 +307,7 @@ impl<'f, S> WebSocketRead<S> {
   pub async fn read_frame<R, E>(
     &mut self,
     send_fn: &mut impl FnMut(Frame<'f>) -> R,
-  ) -> Result<Frame, WebSocketError>
+  ) -> Result<Frame<'_>, WebSocketError>
   where
     S: AsyncRead + Unpin,
     E: Into<Box<dyn std::error::Error + Send + Sync + 'static>>,
@@ -435,7 +435,7 @@ impl<'f, S> WebSocket<S> {
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin,
   {
-    let (stream, read, write) = self.into_parts_internal();
+    let (stream, read, write, _) = self.into_parts_internal();
     let (r, w) = split_fn(stream);
     (
       WebSocketRead {
