@@ -26,13 +26,19 @@ fn assert_frame_too_large<T>(result: Result<T, WebSocketError>) {
 #[tokio::test]
 async fn fragment_collector_rejects_aggregate_binary_over_limit() {
   let (mut peer, socket) = tokio::io::duplex(1024);
-  let mut ws = WebSocket::after_handshake(socket, Role::Client);
+  let mut ws = WebSocket::after_handshake(socket, Role::Client, &None);
   ws.set_max_message_size(9);
   let mut ws = FragmentCollector::new(ws);
 
   let frames = encoded_frames(vec![
-    Frame::new(false, OpCode::Binary, None, b"12345".to_vec().into()),
-    Frame::new(true, OpCode::Continuation, None, b"67890".to_vec().into()),
+    Frame::new(false, OpCode::Binary, None, b"12345".to_vec().into(), false),
+    Frame::new(
+      true,
+      OpCode::Continuation,
+      None,
+      b"67890".to_vec().into(),
+      false,
+    ),
   ]);
   peer.write_all(&frames).await.unwrap();
 
@@ -42,13 +48,19 @@ async fn fragment_collector_rejects_aggregate_binary_over_limit() {
 #[tokio::test]
 async fn fragment_collector_rejects_aggregate_text_over_limit() {
   let (mut peer, socket) = tokio::io::duplex(1024);
-  let mut ws = WebSocket::after_handshake(socket, Role::Client);
+  let mut ws = WebSocket::after_handshake(socket, Role::Client, &None);
   ws.set_max_message_size(9);
   let mut ws = FragmentCollector::new(ws);
 
   let frames = encoded_frames(vec![
-    Frame::new(false, OpCode::Text, None, b"hello".to_vec().into()),
-    Frame::new(true, OpCode::Continuation, None, b"world".to_vec().into()),
+    Frame::new(false, OpCode::Text, None, b"hello".to_vec().into(), false),
+    Frame::new(
+      true,
+      OpCode::Continuation,
+      None,
+      b"world".to_vec().into(),
+      false,
+    ),
   ]);
   peer.write_all(&frames).await.unwrap();
 
@@ -69,8 +81,14 @@ async fn split_fragment_collector_rejects_aggregate_binary_over_limit() {
   let mut ws = FragmentCollectorRead::new(ws_read);
 
   let frames = encoded_frames(vec![
-    Frame::new(false, OpCode::Binary, None, b"12345".to_vec().into()),
-    Frame::new(true, OpCode::Continuation, None, b"67890".to_vec().into()),
+    Frame::new(false, OpCode::Binary, None, b"12345".to_vec().into(), false),
+    Frame::new(
+      true,
+      OpCode::Continuation,
+      None,
+      b"67890".to_vec().into(),
+      false,
+    ),
   ]);
   peer.write_all(&frames).await.unwrap();
 

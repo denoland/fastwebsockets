@@ -87,8 +87,6 @@ where
     parts: &mut http::request::Parts,
     _state: &S,
   ) -> Result<Self, Self::Rejection> {
-    todo!("from_request_parts");
-
     let key = parts
       .headers
       .get(hyper::header::SEC_WEBSOCKET_KEY)
@@ -109,9 +107,6 @@ where
     Ok(Self {
       on_upgrade,
       key: sec_websocket_protocol(key.as_bytes()),
-      permessage_deflate: true,
-      use_client_context_takeover: true,
-      use_server_context_takeover: true,
     })
   }
 }

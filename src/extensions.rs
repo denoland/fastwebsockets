@@ -26,15 +26,11 @@ fn extension_params<'a>(input: Split<'a, char>) -> Vec<ExtensionParam<'a>> {
     .filter_map(|value| {
       let mut split = value.splitn(2, '=');
 
-      split
-        .next()
-        .map(|key| {
-          let value = split
-            .next()
-            .map(|value| value.trim());
+      split.next().map(|key| {
+        let value = split.next().map(|value| value.trim());
 
-          (key.trim(), value)
-        })
+        (key.trim(), value)
+      })
     })
     .collect::<Vec<_>>()
 }
@@ -42,21 +38,19 @@ fn extension_params<'a>(input: Split<'a, char>) -> Vec<ExtensionParam<'a>> {
 fn extension<'a>(input: &'a str) -> Option<WebSocketExtension<'a>> {
   let mut extension = input.split(';');
 
-  extension
-    .next()
-    .map(|name| {
-      let params = extension_params(extension);
-      WebSocketExtension { name: name.trim(), params }
-    })
+  extension.next().map(|name| {
+    let params = extension_params(extension);
+    WebSocketExtension {
+      name: name.trim(),
+      params,
+    }
+  })
 }
 
 /// Parses the Sec-WebSocket-Extensions header value.
 impl<'a> From<&'a str> for WebSocketExtensions<'a> {
   fn from(value: &'a str) -> Self {
-    let extensions = value
-      .split(',')
-      .filter_map(extension)
-      .collect::<Vec<_>>();
+    let extensions = value.split(',').filter_map(extension).collect::<Vec<_>>();
     Self(extensions)
   }
 }
@@ -73,26 +67,43 @@ mod tests {
 
   #[test]
   fn empty() {
-    assert_eq!(WebSocketExtensions::from(""), WebSocketExtensions(vec![
-      WebSocketExtension { name: "", params: vec![] }
-    ]));
+    assert_eq!(
+      WebSocketExtensions::from(""),
+      WebSocketExtensions(vec![WebSocketExtension {
+        name: "",
+        params: vec![]
+      }])
+    );
     assert_eq!(
       WebSocketExtensions::from("    "),
-      WebSocketExtensions(vec![WebSocketExtension { name: "", params: vec![] }])
+      WebSocketExtensions(vec![WebSocketExtension {
+        name: "",
+        params: vec![]
+      }])
     );
     assert_eq!(
       WebSocketExtensions::from(";  ;  "),
-      WebSocketExtensions(vec![
-        WebSocketExtension { name: "", params: vec![("", None), ("", None)] }
-      ])
+      WebSocketExtensions(vec![WebSocketExtension {
+        name: "",
+        params: vec![("", None), ("", None)]
+      }])
     );
     assert_eq!(
       WebSocketExtensions::from(";  ; ,, "),
       WebSocketExtensions(vec![
-        WebSocketExtension { name: "", params: vec![("", None), ("", None)] },
-        WebSocketExtension { name: "", params: vec![] },
-        WebSocketExtension { name: "", params: vec![] }]
-      )
+        WebSocketExtension {
+          name: "",
+          params: vec![("", None), ("", None)]
+        },
+        WebSocketExtension {
+          name: "",
+          params: vec![]
+        },
+        WebSocketExtension {
+          name: "",
+          params: vec![]
+        }
+      ])
     );
   }
 

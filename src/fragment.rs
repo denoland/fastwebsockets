@@ -62,7 +62,7 @@ impl Fragment {
 /// async fn handle_client(
 ///   socket: TcpStream,
 /// ) -> Result<()> {
-///   let ws = WebSocket::after_handshake(socket, Role::Server);
+///   let ws = WebSocket::after_handshake(socket, Role::Server, &None);
 ///   let mut ws = FragmentCollector::new(ws);
 ///
 ///   loop {
