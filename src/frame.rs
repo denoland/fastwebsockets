@@ -153,15 +153,18 @@ impl<'f> Frame<'f> {
     opcode: OpCode,
     mask: Option<[u8; 4]>,
     payload: Payload<'f>,
-    compressed: bool,
   ) -> Self {
     Self {
       fin,
       opcode,
       mask,
       payload,
-      compressed,
+      compressed: false,
     }
+  }
+
+  pub fn builder() -> FrameBuilder<'f> {
+    FrameBuilder::default()
   }
 
   /// Create a new WebSocket text `Frame`.
@@ -495,6 +498,64 @@ impl<'f> Frame<'f> {
       mask: self.mask,
       payload,
       compressed: false,
+    })
+  }
+}
+
+#[derive(Default)]
+pub struct FrameBuilder<'a> {
+  fin: bool,
+  /// The opcode of the frame.
+  opcode: Option<OpCode>,
+  /// The masking key of the frame, if any.
+  mask: Option<[u8; 4]>,
+  /// The payload of the frame.
+  payload: Option<Payload<'a>>,
+  /// Is the frame payload compressed
+  compressed: bool,
+}
+
+impl<'a> FrameBuilder<'a> {
+  pub fn fin(mut self, fin: bool) -> Self {
+    self.fin = fin;
+    self
+  }
+
+  pub fn opcode(mut self, opcode: OpCode) -> Self {
+    self.opcode = Some(opcode);
+    self
+  }
+
+  pub fn mask(mut self, mask: Option<[u8; 4]>) -> Self {
+    self.mask = mask;
+    self
+  }
+
+  pub fn payload(mut self, payload: Payload<'a>) -> Self {
+    self.payload = Some(payload);
+    self
+  }
+
+  pub fn compressed(mut self, compressed: bool) -> Self {
+    self.compressed = compressed;
+    self
+  }
+
+  pub fn build(self) -> Result<Frame<'a>, WebSocketError> {
+    let FrameBuilder {
+      fin,
+      opcode,
+      mask,
+      payload,
+      compressed,
+    } = self;
+
+    Ok(Frame {
+      fin,
+      opcode: opcode.ok_or(WebSocketError::InvalidValue)?,
+      mask,
+      payload: payload.ok_or(WebSocketError::InvalidValue)?,
+      compressed,
     })
   }
 }

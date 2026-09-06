@@ -87,14 +87,8 @@ async fn main() -> Result<()> {
 
       match msg.opcode {
         OpCode::Text | OpCode::Binary => {
-          ws.write_frame(Frame::new(
-            true,
-            msg.opcode,
-            None,
-            msg.payload,
-            false,
-          ))
-          .await?;
+          ws.write_frame(Frame::new(true, msg.opcode, None, msg.payload))
+            .await?;
         }
         OpCode::Close => {
           break;

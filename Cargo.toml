@@ -77,10 +77,10 @@ unstable-split = []
 with_axum = ["axum-core", "http", "async-trait"]
 
 # permessage-deflate
-permessage-deflate = ["upgrade", "dep:flate2", "zlib-ng"]
+permessage-deflate = ["upgrade", "dep:flate2"]
 zlib-ng = ["permessage-deflate", "flate2?/zlib-ng"]
 zlib = ["permessage-deflate", "flate2?/zlib"]
-rust-backend = ["permessage-deflate", "flate2?/rust_backend"]
+miniz_oxide = ["permessage-deflate", "flate2?/miniz_oxide"]
 
 [dev-dependencies]
 tokio = { version = "1.25.0", features = ["full", "macros"] }

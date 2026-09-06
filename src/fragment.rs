@@ -62,7 +62,7 @@ impl Fragment {
 /// async fn handle_client(
 ///   socket: TcpStream,
 /// ) -> Result<()> {
-///   let ws = WebSocket::after_handshake(socket, Role::Server, &None);
+///   let ws = WebSocket::after_handshake(socket, Role::Server);
 ///   let mut ws = FragmentCollector::new(ws);
 ///
 ///   loop {
@@ -83,7 +83,6 @@ pub struct FragmentCollector<S> {
   stream: S,
   read_half: ReadHalf,
   write_half: WriteHalf,
-
   fragments: Fragments,
   compressor: Option<Compress>,
   permessage_deflate: Option<PermessageDeflateWebSocketExtension>,
@@ -120,14 +119,10 @@ impl<'f, S> FragmentCollector<S> {
         let compressor_window_bits = compressor_window_bits.unwrap_or(15);
         let decompressor_window_bits = decompressor_window_bits.unwrap_or(15);
 
-        (
-          Some(Compress::new_with_window_bits(
-            Compression::default(),
-            false,
-            compressor_window_bits,
-          )),
-          Some(decompressor_window_bits),
-        )
+        let compress =
+          new_compress(Compression::default(), compressor_window_bits);
+
+        (Some(compress), Some(decompressor_window_bits))
       }
       None => (None, None),
     };
@@ -199,8 +194,6 @@ impl<'f, S> FragmentCollector<S> {
       OpCode::Close | OpCode::Ping | OpCode::Pong => false,
     };
 
-    let frame = frame;
-
     if can_compress && !frame.compressed {
       if let Some(compressor) = self.compressor.as_mut() {
         let use_context_takeover =
@@ -218,10 +211,8 @@ impl<'f, S> FragmentCollector<S> {
         let mut first = true;
 
         while let Some(fragment) = fragment_compressor.next() {
-          let (done, payload) = fragment.map_err(|err| {
-            eprintln!("{:?}", err);
-            WebSocketError::InvalidEncoding
-          })?;
+          let (done, payload) =
+            fragment.map_err(|_| WebSocketError::InvalidEncoding)?;
 
           if payload.is_empty() {
             continue;
@@ -234,7 +225,13 @@ impl<'f, S> FragmentCollector<S> {
             OpCode::Continuation
           };
 
-          let frame = Frame::new(done, opcode, None, payload.into(), true);
+          let frame = Frame::builder()
+            .opcode(opcode)
+            .payload(payload.into())
+            .compressed(true)
+            .fin(done)
+            .build()?;
+
           self.write_half.write_frame(&mut self.stream, frame).await?;
         }
 
@@ -247,7 +244,6 @@ impl<'f, S> FragmentCollector<S> {
     }
 
     self.write_half.write_frame(&mut self.stream, frame).await?;
-
     Ok(())
   }
 
@@ -316,28 +312,42 @@ impl<'f, S> FragmentCollectorRead<S> {
   }
 }
 
+#[cfg(feature = "miniz_oxide")]
+fn new_compress(level: Compression, _window_bits: u8) -> Compress {
+  Compress::new(level, false)
+}
+
+#[cfg(not(feature = "miniz_oxide"))]
+fn new_compress(level: Compression, window_bits: u8) -> Compress {
+  Compress::new_with_window_bits(level, false, window_bits)
+}
+
+#[cfg(feature = "miniz_oxide")]
+fn new_decompress(_window_bits: u8) -> Decompress {
+  Decompress::new(false)
+}
+
+#[cfg(not(feature = "miniz_oxide"))]
+fn new_decompress(window_bits: u8) -> Decompress {
+  Decompress::new_with_window_bits(false, window_bits)
+}
+
 /// Accumulates potentially fragmented [`Frame`]s to defragment the incoming WebSocket stream.
 struct Fragments {
   fragments: Option<Fragment>,
-
   opcode: OpCode,
   compressed: bool,
-
   decompressor: Option<Decompress>,
 }
 
 impl Fragments {
   pub fn new(window_bits: Option<u8>) -> Self {
-    let decompressor = window_bits.map(|window_bits: _| {
-      Decompress::new_with_window_bits(false, window_bits)
-    });
+    let decompressor = window_bits.map(new_decompress);
 
     Self {
       fragments: None,
-
       opcode: OpCode::Close,
       compressed: false,
-
       decompressor,
     }
   }
@@ -361,9 +371,11 @@ impl Fragments {
           }
 
           let frame = if frame.compressed {
-            frame
-              .inflate(&mut self.decompressor.as_mut().unwrap())
-              .unwrap()
+            let decompressor = self
+              .decompressor
+              .as_mut()
+              .expect("frame must not be marked as compressed");
+            frame.inflate(decompressor)?
           } else {
             frame
           };
@@ -381,13 +393,12 @@ impl Fragments {
             }
           }
 
-          return Ok(Some(Frame::new(
-            true,
-            frame.opcode,
-            None,
-            frame.payload,
-            false,
-          )));
+          let frame = Frame::builder()
+            .fin(true)
+            .opcode(frame.opcode)
+            .payload(frame.payload)
+            .build()?;
+          return Ok(Some(frame));
         } else {
           if frame.payload.len() >= max_message_size {
             return Err(WebSocketError::FrameTooLarge);
@@ -486,13 +497,12 @@ impl Fragments {
           }
 
           if frame.fin {
-            let final_frame = Frame::new(
-              true,
-              self.opcode,
-              None,
-              self.fragments.take().unwrap().take_buffer().into(),
-              self.compressed,
-            );
+            let final_frame = Frame::builder()
+              .fin(true)
+              .opcode(self.opcode)
+              .payload(self.fragments.take().unwrap().take_buffer().into())
+              .compressed(self.compressed)
+              .build()?;
 
             let final_frame = if final_frame.compressed {
               let final_frame = final_frame
@@ -524,13 +534,12 @@ impl Fragments {
           data.extend_from_slice(&frame.payload);
 
           if frame.fin {
-            let frame = Frame::new(
-              true,
-              self.opcode,
-              None,
-              self.fragments.take().unwrap().take_buffer().into(),
-              self.compressed,
-            );
+            let frame = Frame::builder()
+              .fin(true)
+              .opcode(self.opcode)
+              .payload(self.fragments.take().unwrap().take_buffer().into())
+              .compressed(self.compressed)
+              .build()?;
 
             let frame = if frame.compressed {
               frame.inflate(self.decompressor.as_mut().unwrap()).unwrap()

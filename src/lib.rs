@@ -224,7 +224,6 @@ pub(crate) struct ReadHalf {
   writev_threshold: usize,
   max_message_size: usize,
   buffer: BytesMut,
-
   permessage_deflate: bool,
 }
 
@@ -382,11 +381,14 @@ pub struct WebSocket<S> {
   stream: S,
   write_half: WriteHalf,
   read_half: ReadHalf,
-
   permessage_deflate: Option<PermessageDeflateWebSocketExtension>,
 }
 
 impl<'f, S> WebSocket<S> {
+  fn builder() -> WebSocketBuilder<S> {
+    WebSocketBuilder::new()
+  }
+
   /// Creates a new `WebSocket` from a stream that has already completed the WebSocket handshake.
   ///
   /// Use the `upgrade` feature to handle server upgrades and client handshakes.
@@ -401,24 +403,20 @@ impl<'f, S> WebSocket<S> {
   /// async fn handle_client(
   ///   socket: TcpStream,
   /// ) -> Result<()> {
-  ///   let mut ws = WebSocket::after_handshake(socket, Role::Server, &None);
+  ///   let mut ws = WebSocket::after_handshake(socket, Role::Server);
   ///   // ...
   ///   Ok(())
   /// }
   /// ```
-  pub fn after_handshake(
-    stream: S,
-    role: Role,
-    permessage_deflate: &Option<&PermessageDeflateWebSocketExtension>,
-  ) -> Self
+  pub fn after_handshake(stream: S, role: Role) -> Self
   where
     S: AsyncRead + AsyncWrite + Unpin,
   {
     Self {
       stream,
       write_half: WriteHalf::after_handshake(role),
-      read_half: ReadHalf::after_handshake(role, permessage_deflate.is_some()),
-      permessage_deflate: permessage_deflate.clone().cloned(),
+      read_half: ReadHalf::after_handshake(role, false),
+      permessage_deflate: None,
     }
   }
 
@@ -608,10 +606,65 @@ impl<'f, S> WebSocket<S> {
   }
 }
 
+pub struct WebSocketBuilder<S> {
+  stream: Option<S>,
+  role: Option<Role>,
+  permessage_deflate: Option<PermessageDeflateWebSocketExtension>,
+}
+
+impl<S> WebSocketBuilder<S> {
+  fn new() -> Self {
+    Self {
+      stream: None,
+      role: None,
+      permessage_deflate: None,
+    }
+  }
+
+  pub fn stream(mut self, stream: S) -> Self
+  where
+    S: AsyncRead + AsyncWrite + Unpin,
+  {
+    self.stream = Some(stream);
+    self
+  }
+
+  pub fn role(mut self, role: Role) -> Self {
+    self.role = Some(role);
+    self
+  }
+
+  #[cfg(feature = "permessage-deflate")]
+  pub fn permessage_deflate(
+    mut self,
+    permessage_deflate: PermessageDeflateWebSocketExtension,
+  ) -> Self {
+    self.permessage_deflate = Some(permessage_deflate);
+    self
+  }
+
+  pub fn build(self) -> Result<WebSocket<S>, WebSocketError> {
+    let Self {
+      stream,
+      role,
+      permessage_deflate,
+    } = self;
+
+    let role = role.ok_or(WebSocketError::InvalidValue)?;
+
+    Ok(WebSocket {
+      stream: stream.ok_or(WebSocketError::InvalidValue)?,
+      write_half: WriteHalf::after_handshake(role),
+      read_half: ReadHalf::after_handshake(role, permessage_deflate.is_some()),
+      permessage_deflate,
+    })
+  }
+}
+
 const MAX_HEADER_SIZE: usize = 14;
 
 impl ReadHalf {
-  pub fn after_handshake(role: Role, permessage_deflate: bool) -> Self {
+  pub(crate) fn after_handshake(role: Role, permessage_deflate: bool) -> Self {
     let buffer = BytesMut::with_capacity(8192);
 
     Self {
@@ -776,8 +829,15 @@ impl ReadHalf {
 
     // if we read too much it will stay in the buffer, for the next call to this method
     let payload = self.buffer.split_to(payload_len);
-    let frame =
-      Frame::new(fin, opcode, mask, Payload::Bytes(payload), compressed);
+
+    let frame = Frame::builder()
+      .opcode(opcode)
+      .payload(Payload::Bytes(payload.clone()))
+      .fin(fin)
+      .mask(mask)
+      .compressed(compressed)
+      .build()?;
+
     Ok(frame)
   }
 }

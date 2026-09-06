@@ -121,6 +121,31 @@ pub struct UpgradeFut {
   permessage_deflate: Option<PermessageDeflateWebSocketExtension>,
 }
 
+fn negociate_permessage_deflate(
+  sec_websocket_extensions: &str,
+) -> Result<Option<PermessageDeflateWebSocketExtension>, Error> {
+  let exts = WebSocketExtensions::try_from(sec_websocket_extensions)
+    .map_err(|_| WebSocketError::InvalidSecWebSocketExtensions)?;
+
+  for extension in exts.iter() {
+    match extension.name {
+      PERMESSAGE_DEFLATE => {
+        let params =
+          PermessageDeflateWebSocketExtension::try_from(&extension.params)
+            .map_err(|_| WebSocketError::InvalidSecWebSocketExtensions)?;
+        if params.is_supported() {
+          return Ok(Some(params));
+        }
+      }
+      _ => {
+        return Err(WebSocketError::InvalidSecWebSocketExtensions);
+      }
+    }
+  }
+
+  Ok(None)
+}
+
 /// Try to upgrade a received `hyper::Request` to a websocket connection.
 ///
 /// The function returns a HTTP response and a future that resolves to the websocket stream.
@@ -162,22 +187,8 @@ pub fn upgrade<B>(
     let extensions = extensions
       .to_str()
       .map_err(|_| WebSocketError::InvalidSecWebSocketExtensions)?;
-    let exts = WebSocketExtensions::try_from(extensions)
-      .map_err(|_| WebSocketError::InvalidSecWebSocketExtensions)?;
 
-    for extension in exts.iter() {
-      match extension.name {
-        PERMESSAGE_DEFLATE => {
-          let params =
-            PermessageDeflateWebSocketExtension::try_from(&extension.params)
-              .map_err(|_| WebSocketError::InvalidSecWebSocketExtensions)?;
-          permessage_deflate = Some(params);
-        }
-        _ => {
-          return Err(WebSocketError::InvalidSecWebSocketExtensions);
-        }
-      }
-    }
+    permessage_deflate = negociate_permessage_deflate(extensions)?;
   }
 
   let mut response_builder = Response::builder()
@@ -186,37 +197,9 @@ pub fn upgrade<B>(
     .header(hyper::header::UPGRADE, "websocket");
 
   if let Some(ref permessage_deflate) = permessage_deflate {
-    let mut extensions = vec![];
-
-    extensions.push(PERMESSAGE_DEFLATE.to_string());
-
-    if !permessage_deflate.server_context_takeover {
-      extensions.push(SERVER_NO_CONTEXT_TAKEOVER.to_string());
-    }
-
-    if let Some(client_max_window_bits) =
-      permessage_deflate.client_max_window_bits
-    {
-      match client_max_window_bits {
-        Some(client_max_window_bits) => {
-          extensions.push(format!(
-            "{}={}",
-            CLIENT_MAX_WINDOW_BITS, client_max_window_bits
-          ));
-        }
-        None => {
-          extensions.push(format!("{}=15", CLIENT_MAX_WINDOW_BITS));
-        }
-      }
-    }
-
-    if !permessage_deflate.client_context_takeover {
-      extensions.push(CLIENT_NO_CONTEXT_TAKEOVER.to_string());
-    }
-
     response_builder = response_builder.header(
       hyper::header::SEC_WEBSOCKET_EXTENSIONS,
-      extensions.join(";"),
+      permessage_deflate.to_string(),
     );
   }
 
@@ -230,7 +213,6 @@ pub fn upgrade<B>(
 
   let stream = UpgradeFut {
     inner: hyper::upgrade::on(request),
-
     permessage_deflate,
   };
 
@@ -300,10 +282,19 @@ impl std::future::Future for UpgradeFut {
       Poll::Pending => return Poll::Pending,
       Poll::Ready(x) => x,
     };
-    Poll::Ready(Ok(WebSocket::after_handshake(
-      TokioIo::new(upgraded?),
-      Role::Server,
-      &this.permessage_deflate.as_ref(),
-    )))
+
+    let mut web_socket_builder = WebSocket::builder()
+      .stream(TokioIo::new(upgraded?))
+      .role(Role::Server);
+
+    #[cfg(feature = "permessage-deflate")]
+    if let Some(permessage_deflate) = this.permessage_deflate {
+      web_socket_builder =
+        web_socket_builder.permessage_deflate(permessage_deflate.clone());
+    }
+
+    let web_socket = web_socket_builder.build()?;
+
+    Poll::Ready(Ok(web_socket))
   }
 }

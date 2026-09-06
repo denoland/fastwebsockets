@@ -91,7 +91,7 @@ impl AsyncWrite for MockStream {
 async fn test_double_close_sends_only_one_frame() {
   let (stream, write_count, bytes_written) = MockStream::new();
 
-  let mut ws = WebSocket::after_handshake(stream, Role::Server, &None);
+  let mut ws = WebSocket::after_handshake(stream, Role::Server);
   ws.set_writev(false);
   ws.set_auto_close(true);
 
@@ -125,7 +125,7 @@ async fn test_double_close_sends_only_one_frame() {
 async fn test_is_closed_after_close_frame() {
   let (stream, _, _) = MockStream::new();
 
-  let mut ws = WebSocket::after_handshake(stream, Role::Server, &None);
+  let mut ws = WebSocket::after_handshake(stream, Role::Server);
   ws.set_writev(false);
 
   assert!(!ws.is_closed(), "Should not be closed initially");
@@ -140,7 +140,7 @@ async fn test_is_closed_after_close_frame() {
 async fn test_non_close_frame_after_close_fails() {
   let (stream, _, _) = MockStream::new();
 
-  let mut ws = WebSocket::after_handshake(stream, Role::Server, &None);
+  let mut ws = WebSocket::after_handshake(stream, Role::Server);
   ws.set_writev(false);
 
   // Send close frame

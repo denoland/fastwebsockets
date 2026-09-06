@@ -27,7 +27,7 @@ async fn test_fragmented_text_with_partial_utf8() {
 async fn handle_server(
   stream: DuplexStream,
 ) -> Result<(), Box<dyn std::error::Error>> {
-  let ws = WebSocket::after_handshake(stream, Role::Server, &None);
+  let ws = WebSocket::after_handshake(stream, Role::Server);
   let mut ws = FragmentCollector::new(ws);
 
   let frame = ws.read_frame().await?;
@@ -101,7 +101,7 @@ async fn test_low_level_fragmented_text_with_partial_utf8() {
 async fn handle_server_low_level(
   stream: DuplexStream,
 ) -> Result<(), Box<dyn std::error::Error>> {
-  let mut ws = WebSocket::after_handshake(stream, Role::Server, &None);
+  let mut ws = WebSocket::after_handshake(stream, Role::Server);
 
   // should succeed even though it contains partial UTF-8
   let frame1 = ws.read_frame().await?;
@@ -129,7 +129,7 @@ async fn test_invalid_unfragmented_utf8() {
   let (client, server) = tokio::io::duplex(1024);
 
   let server_task = tokio::spawn(async move {
-    let ws = WebSocket::after_handshake(server, Role::Server, &None);
+    let ws = WebSocket::after_handshake(server, Role::Server);
     let mut ws = FragmentCollector::new(ws);
 
     // Should fail with InvalidUTF8 error

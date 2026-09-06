@@ -40,6 +40,48 @@ impl Default for PermessageDeflateWebSocketExtension {
   }
 }
 
+impl PermessageDeflateWebSocketExtension {
+  pub(crate) fn is_supported(&self) -> bool {
+    if cfg!(not(feature = "permessage-deflate")) {
+      return false;
+    }
+
+    let with_window_bits = self.server_max_window_bits.is_some()
+      || self
+        .client_max_window_bits
+        .is_some_and(|value| value.is_some());
+
+    if with_window_bits && cfg!(feature = "miniz_oxide") {
+      return false;
+    }
+
+    true
+  }
+
+  pub(crate) fn to_string(&self) -> String {
+    let mut ext = vec![PERMESSAGE_DEFLATE.to_string()];
+
+    if !self.server_context_takeover {
+      ext.push(SERVER_NO_CONTEXT_TAKEOVER.to_string());
+    }
+
+    if let Some(client_max_window_bits) = self.client_max_window_bits {
+      if let Some(client_max_window_bits) = client_max_window_bits {
+        ext.push(format!(
+          "{}={}",
+          CLIENT_MAX_WINDOW_BITS, client_max_window_bits
+        ));
+      }
+    }
+
+    if !self.client_context_takeover {
+      ext.push(CLIENT_NO_CONTEXT_TAKEOVER.to_string());
+    }
+
+    ext.join(";")
+  }
+}
+
 impl<'a> TryFrom<&WebSocketExtensionParams<'a>>
   for PermessageDeflateWebSocketExtension
 {
@@ -50,21 +92,30 @@ impl<'a> TryFrom<&WebSocketExtensionParams<'a>>
   ) -> Result<Self, Self::Error> {
     let mut ext_params = Self::default();
 
+    let mut server_context_takeover = None;
+    let mut client_context_takeover = None;
+    let mut server_max_window_bits = None;
+    let mut client_max_window_bits = None;
+
     for (param, value) in params {
       match *param {
         SERVER_NO_CONTEXT_TAKEOVER => {
-          if value.is_some() {
+          if value.is_some() || server_context_takeover.is_some() {
             return Err(PerMessageDeflateExtensionError::InvalidParam);
           }
-          ext_params.server_context_takeover = false;
+          server_context_takeover = Some(false);
         }
         CLIENT_NO_CONTEXT_TAKEOVER => {
-          if value.is_some() {
+          if value.is_some() || client_context_takeover.is_some() {
             return Err(PerMessageDeflateExtensionError::InvalidParam);
           }
-          ext_params.client_context_takeover = false;
+          client_context_takeover = Some(false);
         }
         SERVER_MAX_WINDOW_BITS => {
+          if server_max_window_bits.is_some() {
+            return Err(PerMessageDeflateExtensionError::InvalidParam);
+          }
+
           let bits = value
             .ok_or(PerMessageDeflateExtensionError::InvalidParam)
             .and_then(|v| {
@@ -79,9 +130,15 @@ impl<'a> TryFrom<&WebSocketExtensionParams<'a>>
               }
             })?;
 
+          server_max_window_bits = Some(bits);
+
           ext_params.server_max_window_bits = Some(bits);
         }
         CLIENT_MAX_WINDOW_BITS => {
+          if client_max_window_bits.is_some() {
+            return Err(PerMessageDeflateExtensionError::InvalidParam);
+          }
+
           let bits = value
             .map(|value| {
               value
@@ -97,13 +154,20 @@ impl<'a> TryFrom<&WebSocketExtensionParams<'a>>
             })
             .transpose()?;
 
-          ext_params.client_max_window_bits = Some(bits);
+          client_max_window_bits = Some(bits);
         }
         _ => {
           return Err(PerMessageDeflateExtensionError::InvalidParam);
         }
       }
     }
+
+    ext_params.server_context_takeover =
+      server_context_takeover.unwrap_or(true);
+    ext_params.client_context_takeover =
+      client_context_takeover.unwrap_or(true);
+    ext_params.server_max_window_bits = server_max_window_bits;
+    ext_params.client_max_window_bits = client_max_window_bits;
 
     Ok(ext_params)
   }
@@ -118,8 +182,8 @@ mod tests {
   #[test]
   fn basic() {
     let extensions = WebSocketExtensions::from(
-            "permessage-deflate; client_max_window_bits; server_max_window_bits=10, permessage-deflate; client_max_window_bits"
-        );
+      "permessage-deflate; client_max_window_bits; server_max_window_bits=10, permessage-deflate; client_max_window_bits"
+    );
 
     let extensions = Vec::from_iter(extensions.iter());
 
