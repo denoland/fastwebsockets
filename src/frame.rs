@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use flate2::{Compress, Decompress, FlushCompress, FlushDecompress, Status};
+use flate2::{Decompress, FlushDecompress};
 use tokio::io::AsyncWriteExt;
 
 use bytes::BytesMut;

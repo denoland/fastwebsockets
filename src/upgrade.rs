@@ -39,11 +39,7 @@ use crate::{
   WebSocketError,
 };
 
-#[cfg(feature = "permessage-deflate")]
-use crate::permessage_deflate::{
-  CLIENT_MAX_WINDOW_BITS, CLIENT_NO_CONTEXT_TAKEOVER, PERMESSAGE_DEFLATE,
-  SERVER_NO_CONTEXT_TAKEOVER,
-};
+use crate::permessage_deflate::PERMESSAGE_DEFLATE;
 
 fn sec_websocket_protocol(key: &[u8]) -> String {
   let mut sha1 = Sha1::new();
