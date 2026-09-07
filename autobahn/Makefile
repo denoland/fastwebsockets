@@ -1,7 +1,7 @@
 AUTOBAHN_TESTSUITE_DOCKER := crossbario/autobahn-testsuite:latest@sha256:519915fb568b04c9383f70a1c405ae3ff44ab9e35835b085239c258b6fac3074
 
 build-server:
-	sudo cargo build --release --example echo_server --features "upgrade"
+	cargo build --release --example echo_server --features "upgrade,permessage-deflate,zlib-ng"
 
 run-server: build-server
 	echo ${PWD}
@@ -18,7 +18,7 @@ run-server: build-server
 	../target/release/examples/echo_server
 
 build-client:
-	sudo cargo build --release --example autobahn_client --features "upgrade"
+	cargo build --release --example autobahn_client --features "upgrade,permessage-deflate,zlib-ng"
 
 run-client: build-client
 	echo ${PWD}

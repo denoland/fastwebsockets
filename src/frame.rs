@@ -12,12 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use flate2::{Decompress, FlushDecompress};
 use tokio::io::AsyncWriteExt;
 
 use bytes::BytesMut;
 use core::ops::Deref;
 
 use crate::WebSocketError;
+
+const TRAILER: [u8; 4] = [0x00, 0x00, 0xff, 0xff];
 
 macro_rules! repr_u8 {
     ($(#[$meta:meta])* $vis:vis enum $name:ident {
@@ -127,6 +130,7 @@ impl<'a, const N: usize> PartialEq<&'_ [u8; N]> for Payload<'a> {
 }
 
 /// Represents a WebSocket frame.
+#[derive(Debug)]
 pub struct Frame<'f> {
   /// Indicates if this is the final frame in a message.
   pub fin: bool,
@@ -136,6 +140,8 @@ pub struct Frame<'f> {
   mask: Option<[u8; 4]>,
   /// The payload of the frame.
   pub payload: Payload<'f>,
+  /// Is the frame payload compressed
+  pub compressed: bool,
 }
 
 const MAX_HEAD_SIZE: usize = 16;
@@ -153,7 +159,12 @@ impl<'f> Frame<'f> {
       opcode,
       mask,
       payload,
+      compressed: false,
     }
+  }
+
+  pub fn builder() -> FrameBuilder<'f> {
+    FrameBuilder::default()
   }
 
   /// Create a new WebSocket text `Frame`.
@@ -167,6 +178,7 @@ impl<'f> Frame<'f> {
       opcode: OpCode::Text,
       mask: None,
       payload,
+      compressed: false,
     }
   }
 
@@ -179,6 +191,7 @@ impl<'f> Frame<'f> {
       opcode: OpCode::Binary,
       mask: None,
       payload,
+      compressed: false,
     }
   }
 
@@ -197,6 +210,7 @@ impl<'f> Frame<'f> {
       opcode: OpCode::Close,
       mask: None,
       payload: payload.into(),
+      compressed: false,
     }
   }
 
@@ -211,6 +225,7 @@ impl<'f> Frame<'f> {
       opcode: OpCode::Close,
       mask: None,
       payload,
+      compressed: false,
     }
   }
 
@@ -223,6 +238,7 @@ impl<'f> Frame<'f> {
       opcode: OpCode::Pong,
       mask: None,
       payload,
+      compressed: false,
     }
   }
 
@@ -235,6 +251,7 @@ impl<'f> Frame<'f> {
       opcode: OpCode::Ping,
       mask: None,
       payload,
+      compressed: false,
     }
   }
 
@@ -273,6 +290,13 @@ impl<'f> Frame<'f> {
   /// This method panics if the head buffer is not at least n-bytes long, where n is the size of the length field (0, 2, 4, or 10)
   pub fn fmt_head(&mut self, head: &mut [u8]) -> usize {
     head[0] = (self.fin as u8) << 7 | (self.opcode as u8);
+
+    if self.compressed {
+      if self.opcode != OpCode::Continuation {
+        head[0] |= 0b0100_0000; // rsv1
+        head[0] &= !(0b0010_0000 | 0b0001_0000); // rsv2 & rsv3
+      }
+    }
 
     let len = self.payload.len();
     let size = if len < 126 {
@@ -343,8 +367,134 @@ impl<'f> Frame<'f> {
     reserve_enough(buf, len + MAX_HEAD_SIZE);
 
     let size = self.fmt_head(buf);
+
     buf[size..size + len].copy_from_slice(&self.payload);
     &buf[..size + len]
+  }
+}
+
+#[cfg(feature = "permessage-deflate")]
+impl<'f> Frame<'f> {
+  pub(crate) fn inflate(
+    &self,
+    decompressor: &mut Decompress,
+  ) -> Result<Self, WebSocketError> {
+    let mut payload = self.payload.to_vec();
+
+    if self.fin {
+      payload = [payload.as_slice(), &TRAILER].concat();
+    }
+
+    let max_output_size = usize::MAX;
+
+    let mut total_in = 0_usize;
+    let mut total_out = 0_usize;
+    let mut out: Vec<u8> =
+      vec![0; payload.len().saturating_mul(2).min(max_output_size)];
+
+    loop {
+      let in_before = decompressor.total_in();
+      let out_before = decompressor.total_out();
+
+      let status = decompressor.decompress(
+        &payload[total_in..],
+        &mut out[total_out..],
+        FlushDecompress::Sync,
+      );
+
+      let status = status.expect("decompress error");
+
+      if status != flate2::Status::Ok {
+        return Err(WebSocketError::InvalidEncoding);
+      }
+
+      let bytes_consumed = (decompressor.total_in() - in_before) as usize;
+      let bytes_written = (decompressor.total_out() - out_before) as usize;
+
+      total_in += bytes_consumed;
+      total_out += bytes_written;
+
+      if total_in >= payload.len() {
+        break;
+      }
+
+      if out.len() == total_out {
+        let new_len =
+          (out.len() + payload.len().saturating_mul(2)).min(max_output_size);
+        out.resize(new_len, 0);
+
+        continue;
+      }
+    }
+
+    out.truncate(total_out);
+    let payload = Payload::Owned(out);
+
+    Ok(Self {
+      fin: self.fin,
+      opcode: self.opcode,
+      mask: self.mask,
+      payload,
+      compressed: false,
+    })
+  }
+}
+
+#[derive(Default)]
+pub struct FrameBuilder<'a> {
+  fin: bool,
+  /// The opcode of the frame.
+  opcode: Option<OpCode>,
+  /// The masking key of the frame, if any.
+  mask: Option<[u8; 4]>,
+  /// The payload of the frame.
+  payload: Option<Payload<'a>>,
+  /// Is the frame payload compressed
+  compressed: bool,
+}
+
+impl<'a> FrameBuilder<'a> {
+  pub fn fin(mut self, fin: bool) -> Self {
+    self.fin = fin;
+    self
+  }
+
+  pub fn opcode(mut self, opcode: OpCode) -> Self {
+    self.opcode = Some(opcode);
+    self
+  }
+
+  pub fn mask(mut self, mask: Option<[u8; 4]>) -> Self {
+    self.mask = mask;
+    self
+  }
+
+  pub fn payload(mut self, payload: Payload<'a>) -> Self {
+    self.payload = Some(payload);
+    self
+  }
+
+  pub fn compressed(mut self, compressed: bool) -> Self {
+    self.compressed = compressed;
+    self
+  }
+
+  pub fn build(self) -> Result<Frame<'a>, WebSocketError> {
+    let FrameBuilder {
+      fin,
+      opcode,
+      mask,
+      payload,
+      compressed,
+    } = self;
+
+    Ok(Frame {
+      fin,
+      opcode: opcode.ok_or(WebSocketError::InvalidValue)?,
+      mask,
+      payload: payload.ok_or(WebSocketError::InvalidValue)?,
+      compressed,
+    })
   }
 }
 

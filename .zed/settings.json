@@ -1,0 +1,13 @@
+{
+  "format_on_save": "on",
+  "tab_size": 2,
+  "lsp": {
+    "rust-analyzer": {
+      "initialization_options": {
+        "cargo": {
+          "features": ["permessage-deflate", "zlib-ng", "unstable-split"],
+        },
+      },
+    },
+  },
+}

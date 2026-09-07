@@ -5,7 +5,6 @@ use tokio::io::AsyncWriteExt;
 use tokio::io::DuplexStream;
 
 use fastwebsockets::FragmentCollector;
-use fastwebsockets::Frame;
 use fastwebsockets::OpCode;
 use fastwebsockets::Role;
 use fastwebsockets::WebSocket;

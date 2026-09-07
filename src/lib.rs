@@ -154,6 +154,19 @@ mod close;
 mod error;
 mod fragment;
 mod frame;
+
+#[cfg(feature = "permessage-deflate")]
+#[cfg_attr(docsrs, doc(cfg(feature = "permessage-deflate")))]
+mod extensions;
+
+#[cfg(feature = "permessage-deflate")]
+#[cfg_attr(docsrs, doc(cfg(feature = "permessage-deflate")))]
+mod fragment_compressor;
+
+#[cfg(feature = "permessage-deflate")]
+#[cfg_attr(docsrs, doc(cfg(feature = "permessage-deflate")))]
+mod permessage_deflate;
+
 /// Client handshake.
 #[cfg(feature = "upgrade")]
 #[cfg_attr(docsrs, doc(cfg(feature = "upgrade")))]
@@ -167,6 +180,7 @@ pub mod upgrade;
 use bytes::Buf;
 
 use bytes::BytesMut;
+
 #[cfg(feature = "unstable-split")]
 use std::future::Future;
 
@@ -174,6 +188,8 @@ use tokio::io::AsyncRead;
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWrite;
 use tokio::io::AsyncWriteExt;
+
+use permessage_deflate::PermessageDeflateWebSocketExtension;
 
 pub use crate::close::CloseCode;
 pub use crate::error::WebSocketError;
@@ -192,7 +208,7 @@ pub enum Role {
 }
 
 pub(crate) struct WriteHalf {
-  role: Role,
+  pub(crate) role: Role,
   closed: bool,
   vectored: bool,
   auto_apply_mask: bool,
@@ -208,6 +224,7 @@ pub(crate) struct ReadHalf {
   writev_threshold: usize,
   max_message_size: usize,
   buffer: BytesMut,
+  permessage_deflate: bool,
 }
 
 #[cfg(feature = "unstable-split")]
@@ -236,7 +253,7 @@ where
   (
     WebSocketRead {
       stream: read,
-      read_half: ReadHalf::after_handshake(role),
+      read_half: ReadHalf::after_handshake(role, false),
     },
     WebSocketWrite {
       stream: write,
@@ -289,7 +306,7 @@ impl<'f, S> WebSocketRead<S> {
   pub async fn read_frame<R, E>(
     &mut self,
     send_fn: &mut impl FnMut(Frame<'f>) -> R,
-  ) -> Result<Frame, WebSocketError>
+  ) -> Result<Frame<'_>, WebSocketError>
   where
     S: AsyncRead + Unpin,
     E: Into<Box<dyn std::error::Error + Send + Sync + 'static>>,
@@ -364,9 +381,14 @@ pub struct WebSocket<S> {
   stream: S,
   write_half: WriteHalf,
   read_half: ReadHalf,
+  permessage_deflate: Option<PermessageDeflateWebSocketExtension>,
 }
 
 impl<'f, S> WebSocket<S> {
+  fn builder() -> WebSocketBuilder<S> {
+    WebSocketBuilder::new()
+  }
+
   /// Creates a new `WebSocket` from a stream that has already completed the WebSocket handshake.
   ///
   /// Use the `upgrade` feature to handle server upgrades and client handshakes.
@@ -393,7 +415,8 @@ impl<'f, S> WebSocket<S> {
     Self {
       stream,
       write_half: WriteHalf::after_handshake(role),
-      read_half: ReadHalf::after_handshake(role),
+      read_half: ReadHalf::after_handshake(role, false),
+      permessage_deflate: None,
     }
   }
 
@@ -410,7 +433,7 @@ impl<'f, S> WebSocket<S> {
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin,
   {
-    let (stream, read, write) = self.into_parts_internal();
+    let (stream, read, write, _) = self.into_parts_internal();
     let (r, w) = split_fn(stream);
     (
       WebSocketRead {
@@ -433,8 +456,20 @@ impl<'f, S> WebSocket<S> {
 
   /// Consumes the `WebSocket` and returns the underlying stream.
   #[inline]
-  pub(crate) fn into_parts_internal(self) -> (S, ReadHalf, WriteHalf) {
-    (self.stream, self.read_half, self.write_half)
+  pub(crate) fn into_parts_internal(
+    self,
+  ) -> (
+    S,
+    ReadHalf,
+    WriteHalf,
+    Option<PermessageDeflateWebSocketExtension>,
+  ) {
+    (
+      self.stream,
+      self.read_half,
+      self.write_half,
+      self.permessage_deflate,
+    )
   }
 
   /// Sets whether to use vectored writes. This option does not guarantee that vectored writes will be always used.
@@ -571,10 +606,65 @@ impl<'f, S> WebSocket<S> {
   }
 }
 
+pub struct WebSocketBuilder<S> {
+  stream: Option<S>,
+  role: Option<Role>,
+  permessage_deflate: Option<PermessageDeflateWebSocketExtension>,
+}
+
+impl<S> WebSocketBuilder<S> {
+  fn new() -> Self {
+    Self {
+      stream: None,
+      role: None,
+      permessage_deflate: None,
+    }
+  }
+
+  pub fn stream(mut self, stream: S) -> Self
+  where
+    S: AsyncRead + AsyncWrite + Unpin,
+  {
+    self.stream = Some(stream);
+    self
+  }
+
+  pub fn role(mut self, role: Role) -> Self {
+    self.role = Some(role);
+    self
+  }
+
+  #[cfg(feature = "permessage-deflate")]
+  pub fn permessage_deflate(
+    mut self,
+    permessage_deflate: PermessageDeflateWebSocketExtension,
+  ) -> Self {
+    self.permessage_deflate = Some(permessage_deflate);
+    self
+  }
+
+  pub fn build(self) -> Result<WebSocket<S>, WebSocketError> {
+    let Self {
+      stream,
+      role,
+      permessage_deflate,
+    } = self;
+
+    let role = role.ok_or(WebSocketError::InvalidValue)?;
+
+    Ok(WebSocket {
+      stream: stream.ok_or(WebSocketError::InvalidValue)?,
+      write_half: WriteHalf::after_handshake(role),
+      read_half: ReadHalf::after_handshake(role, permessage_deflate.is_some()),
+      permessage_deflate,
+    })
+  }
+}
+
 const MAX_HEADER_SIZE: usize = 14;
 
 impl ReadHalf {
-  pub fn after_handshake(role: Role) -> Self {
+  pub(crate) fn after_handshake(role: Role, permessage_deflate: bool) -> Self {
     let buffer = BytesMut::with_capacity(8192);
 
     Self {
@@ -584,6 +674,7 @@ impl ReadHalf {
       auto_pong: true,
       writev_threshold: 1024,
       max_message_size: 64 << 20,
+      permessage_deflate,
       buffer,
     }
   }
@@ -675,7 +766,11 @@ impl ReadHalf {
     let rsv2 = self.buffer[0] & 0b00100000 != 0;
     let rsv3 = self.buffer[0] & 0b00010000 != 0;
 
-    if rsv1 || rsv2 || rsv3 {
+    let mut compressed = false;
+
+    if self.permessage_deflate && rsv1 && !rsv2 && !rsv3 {
+      compressed = true;
+    } else if rsv1 || rsv2 || rsv3 {
       return Err(WebSocketError::ReservedBitsNotZero);
     }
 
@@ -734,7 +829,15 @@ impl ReadHalf {
 
     // if we read too much it will stay in the buffer, for the next call to this method
     let payload = self.buffer.split_to(payload_len);
-    let frame = Frame::new(fin, opcode, mask, Payload::Bytes(payload));
+
+    let frame = Frame::builder()
+      .opcode(opcode)
+      .payload(Payload::Bytes(payload.clone()))
+      .fin(fin)
+      .mask(mask)
+      .compressed(compressed)
+      .build()?;
+
     Ok(frame)
   }
 }
