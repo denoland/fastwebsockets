@@ -30,7 +30,7 @@
 //! async fn handle(
 //!   socket: TcpStream,
 //! ) -> Result<()> {
-//!   let mut ws = WebSocket::after_handshake(socket, Role::Server, &None);
+//!   let mut ws = WebSocket::after_handshake(socket, Role::Server);
 //!   ws.set_writev(false);
 //!   ws.set_auto_close(true);
 //!   ws.set_auto_pong(true);
@@ -64,7 +64,7 @@
 //! async fn handle(
 //!   socket: TcpStream,
 //! ) -> Result<()> {
-//!   let mut ws = WebSocket::after_handshake(socket, Role::Server, &None);
+//!   let mut ws = WebSocket::after_handshake(socket, Role::Server);
 //!   let mut ws = FragmentCollector::new(ws);
 //!   let incoming = ws.read_frame().await?;
 //!   // Always returns full messages

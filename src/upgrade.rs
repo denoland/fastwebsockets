@@ -35,11 +35,14 @@ use std::task::Poll;
 
 use crate::{
   extensions::WebSocketExtensions,
-  permessage_deflate::{
-    PermessageDeflateWebSocketExtension, CLIENT_MAX_WINDOW_BITS,
-    CLIENT_NO_CONTEXT_TAKEOVER, PERMESSAGE_DEFLATE, SERVER_NO_CONTEXT_TAKEOVER,
-  },
+  permessage_deflate::PermessageDeflateWebSocketExtension,
   Role, WebSocket, WebSocketError,
+};
+
+#[cfg(feature = "permessage-deflate")]
+use crate::permessage_deflate::{
+  CLIENT_MAX_WINDOW_BITS,
+  CLIENT_NO_CONTEXT_TAKEOVER, PERMESSAGE_DEFLATE, SERVER_NO_CONTEXT_TAKEOVER,
 };
 
 fn sec_websocket_protocol(key: &[u8]) -> String {
@@ -121,6 +124,8 @@ pub struct UpgradeFut {
   permessage_deflate: Option<PermessageDeflateWebSocketExtension>,
 }
 
+/// Picks the first supported permessage-deflate option.
+/// An option set may not be supported depending on the zlib backend.
 fn negociate_permessage_deflate(
   sec_websocket_extensions: &str,
 ) -> Result<Option<PermessageDeflateWebSocketExtension>, Error> {
