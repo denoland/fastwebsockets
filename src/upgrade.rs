@@ -35,14 +35,14 @@ use std::task::Poll;
 
 use crate::{
   extensions::WebSocketExtensions,
-  permessage_deflate::PermessageDeflateWebSocketExtension,
-  Role, WebSocket, WebSocketError,
+  permessage_deflate::PermessageDeflateWebSocketExtension, Role, WebSocket,
+  WebSocketError,
 };
 
 #[cfg(feature = "permessage-deflate")]
 use crate::permessage_deflate::{
-  CLIENT_MAX_WINDOW_BITS,
-  CLIENT_NO_CONTEXT_TAKEOVER, PERMESSAGE_DEFLATE, SERVER_NO_CONTEXT_TAKEOVER,
+  CLIENT_MAX_WINDOW_BITS, CLIENT_NO_CONTEXT_TAKEOVER, PERMESSAGE_DEFLATE,
+  SERVER_NO_CONTEXT_TAKEOVER,
 };
 
 fn sec_websocket_protocol(key: &[u8]) -> String {

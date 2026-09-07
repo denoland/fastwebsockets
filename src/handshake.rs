@@ -106,14 +106,13 @@ where
 
   match hyper::upgrade::on(&mut response).await {
     Ok(upgraded) => {
-
       let web_socket = WebSocket::builder()
         .stream(TokioIo::new(upgraded))
         .role(Role::Client)
         .build()?;
 
       Ok((web_socket, response))
-    },
+    }
     Err(e) => Err(e.into()),
   }
 }
