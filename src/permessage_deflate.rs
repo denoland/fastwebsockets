@@ -22,12 +22,10 @@ pub struct PermessageDeflateWebSocketExtension {
 }
 
 pub(crate) const PERMESSAGE_DEFLATE: &str = "permessage-deflate";
-pub(crate) const SERVER_NO_CONTEXT_TAKEOVER: &str =
-  "server_no_context_takeover";
-pub(crate) const CLIENT_NO_CONTEXT_TAKEOVER: &str =
-  "client_no_context_takeover";
-pub(crate) const SERVER_MAX_WINDOW_BITS: &str = "server_max_window_bits";
-pub(crate) const CLIENT_MAX_WINDOW_BITS: &str = "client_max_window_bits";
+const SERVER_NO_CONTEXT_TAKEOVER: &str = "server_no_context_takeover";
+const CLIENT_NO_CONTEXT_TAKEOVER: &str = "client_no_context_takeover";
+const SERVER_MAX_WINDOW_BITS: &str = "server_max_window_bits";
+const CLIENT_MAX_WINDOW_BITS: &str = "client_max_window_bits";
 
 impl Default for PermessageDeflateWebSocketExtension {
   fn default() -> Self {
