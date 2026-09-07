@@ -375,69 +375,7 @@ impl<'f> Frame<'f> {
 
 #[cfg(feature = "permessage-deflate")]
 impl<'f> Frame<'f> {
-  pub fn deflate(
-    &self,
-    compressor: &mut Compress,
-    flush: FlushCompress,
-  ) -> Result<Self, WebSocketError> {
-    let payload = self.payload.to_vec();
-
-    let mut total_in = 0_usize;
-    let mut total_out = 0_usize;
-    let mut out: Vec<u8> = vec![0; payload.len()];
-
-    loop {
-      let out_space_before = out.len() - total_out;
-
-      let in_before = compressor.total_in();
-      let out_before = compressor.total_out();
-
-      let status = compressor
-        .compress(&payload[total_in..], &mut out[total_out..], flush)
-        .expect("compress failed");
-
-      if status != Status::Ok {
-        return Err(WebSocketError::InvalidEncoding);
-      }
-
-      let bytes_consumed = (compressor.total_in() - in_before) as usize;
-      let bytes_written = (compressor.total_out() - out_before) as usize;
-
-      total_in += bytes_consumed;
-      total_out += bytes_written;
-
-      let output_was_full = bytes_written == out_space_before;
-
-      if output_was_full {
-        let new_len = out.len() + payload.len();
-        out.resize(new_len, 0);
-
-        continue;
-      }
-
-      if total_in >= payload.len() {
-        break;
-      }
-    }
-
-    out.truncate(total_out);
-
-    if self.fin {
-      out.truncate(out.len() - 4); // remove zlib trailer too
-    }
-
-    let payload = Payload::Owned(out);
-
-    Ok(Self {
-      fin: self.fin,
-      opcode: self.opcode,
-      mask: self.mask,
-      payload,
-      compressed: true,
-    })
-  }
-
-  pub fn inflate(
+  pub(crate) fn inflate(
     &self,
     decompressor: &mut Decompress,
   ) -> Result<Self, WebSocketError> {
